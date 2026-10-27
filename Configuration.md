@@ -12,10 +12,22 @@ Steps are in general:
 5. Configure thermostat device (model selection)
 6. Configure clock settings
 
+## Login, Wi-Fi passwords and recovery
+
+With v1.25.0-labo.5 and later, administrative access normally uses **admin** and the saved Wi-Fi password. Initial setup is available before Wi-Fi credentials exist. You can disable **Require administrator login** in Network Configuration; MQTT credentials are separate.
+
+Wi-Fi passwords may contain 8–63 bytes, including spaces and punctuation, or exactly 64 hexadecimal digits. HTTP Digest declares UTF-8 for non-ASCII passwords; your access point must accept the same bytes. Leave **Keep saved WiFi password** checked when changing other settings. To replace the password, uncheck it and enter the new value. An open Wi-Fi network requires administrator login to be disabled. Stored passwords are not sent back in the page source.
+
+AP fallback is enabled once when upgrading from older settings and subsequently follows your saved choice. It opens an AP after a persistent Wi-Fi failure, or a persistent gateway failure with static IP, while keeping station reconnection enabled. It does not open on every healthy boot. An automatic recovery AP keeps administrator authentication enabled.
+
+If you forget the administrator password, use the **Wi-Fi setup function on the thermostat panel**. The thermostat MCU sends this request to the ESP8266 over UART; no extra ESP buttons are required. On supported controllers, this opens an AP-only recovery window for five minutes at `http://192.168.4.1`, with AP key `12345678`. Access through that AP can change network/login settings without the forgotten login. Disable the login requirement while retaining the saved Wi-Fi password, or enter replacement credentials, then save. Configuration is not factory-reset. The panel gesture depends on the thermostat model; minimal bridge firmware does not include this MCU integration.
+
+See [Wi-Fi recovery](README.md#optional-bssid-lock-and-recovery) for timing, alternate automatic AP addresses and limitations, and [administration](README.md#administration-and-security) for password storage and downgrade compatibility.
+
 ## 1. Connect to the WiFi Access Point of the Thermostat
 
 * The thermostat becomes an Access Point when it's started first time after flashing with no configuration.
-* The AccessPoint is named `Thermostat-xxxxxx`. Default password is `12345678`
+* The AccessPoint is named `WThermostat-xxxxxx`. Default password is `12345678`
 * Use your Smartphone or any other WiFi Client with web browser and connect to the Thermostat.
 * You'll get an IP Address by DHCP in Range 192.168.4.0/24
 
@@ -27,7 +39,7 @@ Steps are in general:
 * Fill out 'Hostname/Idx' (unique id of your choice), 'WiFi SSID' (only 2.4G, Name is case sensitive), 'Password' for WiFi
 * If you don't want to use MQTT, press 'Save Configuration' and wait for reboot of device.
 
-![homeassistant](docs/images/Setup_Network.png)  
+![Network configuration](docs/images/interface/network.png)
 
 ## 2. Configure MQTT (optional) and HASS Autodiscovery
 
@@ -71,7 +83,7 @@ setting to calculate the state of the Heating Relay
 * Choose **workday and weekend** start in your region
 * Press 'Save Configuration' and wait for reboot of device.
 
-![homeassistant](docs/images/Setup_Thermostat.png)  
+![Thermostat configuration](docs/images/interface/thermostat.png)
 
 ### External Temperature Sensor
 
@@ -128,6 +140,6 @@ If you cannot access your device, try to switch to Access-Point mode:
 * Power off the device by Pressing the button in the middle.
 * Then press the "down" button (most right) for about 8 seconds.
 * The Screen starts to blink and shows a WiFi-Icon.
-* The thermostat is now an Access Point named `Thermostat-xxxxxx`. Default password is `12345678`
-* Now you can fix network settings.
+* The thermostat is now an Access Point named `WThermostat-xxxxxx`. Default password is `12345678`
+* On v1.25.0-labo.5 and later, you have five minutes to change network/login settings through this AP without the forgotten administrator password; existing settings are retained.
 * Saving settings or pressing power button switches back to Station mode

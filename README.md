@@ -2,19 +2,19 @@
 
 Local-control firmware for compatible **ESP8266 Beca/Moes/Qiumi Wi-Fi thermostats**, without a Tuya cloud dependency. This is the maintenance fork of [fashberg/WThermostatBeca](https://github.com/fashberg/WThermostatBeca), originally based on [klausahrenberg/WThermostatBeca](https://github.com/klausahrenberg/WThermostatBeca).
 
-**Current pre-release: [v1.25.0-labo.4](https://github.com/labodj/WThermostatBeca-labo/releases/tag/v1.25.0-labo.4).** See GitHub Releases for changes, firmware downloads and upgrade notes.
+**Current stable release: [v1.25.0-labo.5](https://github.com/labodj/WThermostatBeca-labo/releases/tag/v1.25.0-labo.5).** See GitHub Releases for changes, firmware downloads and upgrade notes.
 
 [![Build](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml/badge.svg)](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml)
-[![Release including pre-releases](https://img.shields.io/github/v/release/labodj/WThermostatBeca-labo?include_prereleases)](https://github.com/labodj/WThermostatBeca-labo/releases)
+[![Latest stable release](https://img.shields.io/github/v/release/labodj/WThermostatBeca-labo)](https://github.com/labodj/WThermostatBeca-labo/releases)
 
 ## Get the firmware
 
 | File in the release | Purpose |
 |---|---|
-| **[`wthermostat-1.25.0-labo.4.bin`](https://github.com/labodj/WThermostatBeca-labo/releases/download/v1.25.0-labo.4/wthermostat-1.25.0-labo.4.bin)** | Normal firmware for a supported thermostat; use this image for an ordinary upgrade. |
-| `wthermostat-1.25.0-labo.4.bin.gz` | The same image compressed for OTA paths that support gzip; not for direct serial flashing. |
-| `wthermostat-minimal-1.25.0-labo.4.bin` / `.bin.gz` | Temporary OTA bridge when space is insufficient. It has **no thermostat control, MQTT or clock**; replace it with normal firmware afterwards. |
-| `wthermostat-symbols-1.25.0-labo.4.zip` | Matching normal ELF/MAP files for diagnosis, not a flash image. |
+| **[`wthermostat-1.25.0-labo.5.bin`](https://github.com/labodj/WThermostatBeca-labo/releases/download/v1.25.0-labo.5/wthermostat-1.25.0-labo.5.bin)** | Normal firmware for a supported thermostat; use this image for an ordinary upgrade. |
+| `wthermostat-1.25.0-labo.5.bin.gz` | The same image compressed for OTA paths that support gzip; not for direct serial flashing. |
+| `wthermostat-minimal-1.25.0-labo.5.bin` / `.bin.gz` | Temporary OTA bridge when space is insufficient. It has **no thermostat control, MQTT or clock**; replace it with normal firmware afterwards. |
+| `wthermostat-symbols-1.25.0-labo.5.zip` | Matching normal ELF/MAP files for diagnosis, not a flash image. |
 | `SHA256SUMS`, `BUILD-MANIFEST.json`, `SOURCE-MANIFEST.json` | Artifact checksums, build/image validation and source provenance. |
 
 The normal image is built for **ESP8266, 1 MiB flash, DOUT, 40 MHz flash / 80 MHz CPU**. Check the hardware before installation. Debug firmware is for development boards only: its UART log output conflicts with the thermostat MCU. It is not published as an installable thermostat image.
@@ -48,7 +48,8 @@ Historical hardware references: [installation](Installation.md), [first-flash gu
 - MQTT state/control, retained state and availability, and Home Assistant discovery.
 - Read-only WebThings access and authenticated property writes.
 - NTP, timezone/DST rules and existing MCU time/calibration workarounds.
-- Optional Wi-Fi BSSID lock, preserved across reconnections, with timed recovery AP.
+- Optional Wi-Fi BSSID lock, preserved across reconnections, with fault-triggered recovery AP alongside the station connection.
+- Long Wi-Fi passwords and temporary local login recovery through the thermostat panel's Wi-Fi setup function.
 - Optional administrator authentication (enabled by default), POST/CSRF protections and per-request HTTP buffers.
 - Bounded schedule, UART, JSON and MQTT parsing, corrected resource ownership and numeric serialization.
 - Vendored WAdapter, pinned build dependencies, sanitizer-backed regression tests and repeatable static analysis.
@@ -69,7 +70,7 @@ On initial setup:
 
 The AP password and the administrative web password are different roles. After Wi-Fi is configured, administration requires login by default: **username `admin` and the saved Wi-Fi password**. The login requirement can be disabled explicitly in Network Configuration. MQTT keeps its separately configured broker credentials.
 
-Initial provisioning is accessible before a Wi-Fi configuration exists. When administrator login is enabled, a fallback AP with saved credentials does not bypass it. An explicitly requested setup AP provides the existing passwordless-configuration recovery path. More background: [configuration guide](Configuration.md); its legacy screenshots and authentication descriptions may differ from this release.
+Initial provisioning is accessible before a Wi-Fi configuration exists. An automatic recovery AP keeps administrator login enabled. Since v1.25.0-labo.5, a physical Wi-Fi setup request opens a five-minute local recovery window; see the recovery instructions below. More background: [configuration guide](Configuration.md); the authentication and recovery instructions apply to this release.
 
 ## Upgrade an existing thermostat
 
@@ -78,7 +79,7 @@ Initial provisioning is accessible before a Wi-Fi configuration exists. When adm
 3. After reboot, reload the page and sign in with `admin` and the configured Wi-Fi password.
 4. Verify model, Wi-Fi/MQTT, time, schedules and Home Assistant availability on the physical device.
 
-A reset is not required for the legacy fashberg settings layouts covered by the tests: field offsets, sizes and version flags are preserved. The BSSID extension uses previously unused EEPROM tail bytes. Much older upstream layouts may follow their existing migration path; do not assume every setting from every historic firmware will survive.
+A reset is not required for the legacy fashberg settings layouts covered by the tests: legacy field offsets, individual field sizes and version flags are preserved. The BSSID remains in its existing EEPROM tail slot; long Wi-Fi passwords use a checked extension after the original 512-byte area. AP fallback is enabled once on migration; your later choice is retained. Much older upstream layouts may follow their existing migration path; do not assume every setting from every historic firmware will survive.
 
 If the normal image cannot fit, the minimal image is a temporary bridge, not a usable thermostat firmware. Complete the second upgrade to normal firmware. Compressed OTA is available where the update path supports it. Local size calculations and valid image checksums are not a physical OTA test.
 
@@ -94,14 +95,18 @@ If the normal image cannot fit, the minimal image is a temporary bridge, not a u
 
 **Require administrator login** in Network Configuration controls web, OTA, WebThings writes and WebSocket log access. It defaults to enabled for existing valid configurations; old forms without the new option preserve the current choice. Disabling it lets anyone who can reach the device administer it and upload firmware. POST, Origin and configuration-form CSRF checks remain active; MQTT credentials are unaffected. Saving the setting restarts the device. Enabling login with an empty Wi-Fi password is rejected before settings are changed.
 
-This switch must be changed while you can still access the device. It is not an anonymous password-reset endpoint; if login is enabled and the Wi-Fi password is lost, recover the password or use an authorized physical recovery/reflash procedure.
+Since v1.25.0-labo.5, the firmware supports Wi-Fi passphrases of **8–63 bytes**, including spaces and punctuation, or a **64-digit hexadecimal PSK**. HTTP Digest explicitly declares UTF-8 for non-ASCII passwords; the access point must support the same password bytes. Empty passwords are supported for open Wi-Fi with administrator login disabled. Existing credentials are preserved. Uncheck **Keep saved WiFi password** to replace a password, or leave it checked when changing other network settings. Passwords are not included in the configuration page source.
+
+Long passwords use a checked extension of the existing EEPROM area. All legacy configuration fields and BSSID addresses stay in place. Downgrading to an older firmware cannot retain support for passwords longer than 32 bytes: change to a supported password before downgrading.
+
+**Forgotten administrator password (full firmware, v1.25.0-labo.5 and later):** use the thermostat's physical Wi-Fi setup gesture. On supported Beca controllers, hold Down while the thermostat is off, or Power + Down while it is on, until Wi-Fi setup is requested (typically around eight seconds; the gesture depends on the model). Join `WThermostat-<chip-id>` with AP key `12345678` and open `http://192.168.4.1`. For five minutes, requests received on that AP can change network/login settings without the forgotten administrator password. Disable **Require administrator login** while keeping the saved Wi-Fi password, or enter replacement Wi-Fi credentials, then save. Other settings are retained. The normal LAN interface does not gain this bypass; automatic fallback and MQTT AP commands do not enable it. Anyone nearby who knows the AP key can use this physically activated window. Minimal firmware has no thermostat-button recovery because it omits the MCU integration.
 
 HTTP Digest authenticates requests but **does not encrypt HTTP traffic**. Use a trusted network. Do not expose the thermostat's administration directly to the Internet. Password values are not written to diagnostic logs.
 
 The command-line OTA uploader prompts for the password; it does not take a password argument. Replace the documentation address `192.0.2.10` with the device address:
 
 ```sh
-python pio/espupload.py --host 192.0.2.10 --file wthermostat-1.25.0-labo.4.bin
+python pio/espupload.py --host 192.0.2.10 --file wthermostat-1.25.0-labo.5.bin
 ```
 
 For unattended use, supply `WTHERMOSTAT_PASSWORD` through an appropriate protected environment. No device address is configured as a default upload destination.
@@ -110,9 +115,15 @@ For unattended use, supply `WTHERMOSTAT_PASSWORD` through an appropriate protect
 
 In **Network Configuration**, leave **AP BSSID** empty for automatic AP selection, or enter a unicast MAC such as `02:11:22:33:44:55` to select one AP. The lock applies to initial connection and reconnections. The channel remains automatic, so that AP can change channel. BSSID selection is not an authentication boundary.
 
-If the locked AP is unavailable for **120 seconds continuously**, a recovery AP opens even when ordinary AP fallback is disabled. The normal/minimal configuration window lasts **five minutes**; opening Network Configuration refreshes it. Change or clear the BSSID, and update SSID/password if replacing an AP. If administrator login is enabled, saved credentials still protect the web interface.
+Since v1.25.0-labo.5, **AP fallback is enabled once on migration**, including configurations imported from fashberg and earlier labo releases. Subsequent changes to that option are retained. Existing network, MQTT, clock, thermostat and schedule settings are preserved. No recovery AP opens on a healthy startup.
 
-When the window expires, the firmware retries the locked AP and repeats recovery if necessary. The lock is never silently removed. Manual setup requests take priority; OTA activity defers mode changes. Info shows both the configured lock and connected AP BSSID. Physical radio/failure recovery remains a hardware qualification item.
+With AP fallback enabled, a recovery AP opens after **120 seconds continuously offline**. A BSSID lock enables this offline recovery even if the fallback checkbox is off. Reconnection attempts continue alongside the AP and always retain the configured BSSID. An automatic recovery AP still requires administrator login when enabled.
+
+For a static IP, fallback also checks the configured gateway on the local LAN using ARP. A persistent failure opens the recovery AP even when Wi-Fi association succeeds. Internet, DNS, MQTT and Home Assistant availability are not used as health checks. Existing ARP cache entries can delay detection; a reachable gateway cannot prove that every client can reach the thermostat or detect every IP conflict. New static configurations reject inconsistent subnet masks, off-subnet gateways, network/broadcast addresses and an IP equal to the gateway before saving.
+
+The automatic AP normally uses `192.168.4.1`; if that subnet overlaps the station network, it selects `172.31.255.1` or `10.255.255.1`. Join the AP with key `12345678`; its captive DNS points to the recovery address. The normal/minimal recovery window lasts **five minutes** (two in debug builds); opening Network Configuration through that AP refreshes it. After the window expires, the AP closes and a persistent fault can reopen it after another two minutes. Settings and BSSID remain saved. OTA activity defers recovery mode changes. The physical setup gesture provides the separate AP-only recovery path described above, independent of the configured static IP.
+
+Recovery timing, saved configuration and authentication boundaries have host regression tests. Radio behavior, button gestures and browser login across devices still require testing on each supported thermostat model.
 
 ## Home Assistant
 
@@ -197,6 +208,8 @@ Property writes use HTTP Digest PUT on the property endpoints. WebThings gateway
 
 ![Schedules](docs/images/interface/schedules.png)
 
+These screenshots show earlier labo builds. Version 1.25.0-labo.5 adds the **Keep saved WiFi password** checkbox to Network Configuration.
+
 ## Build and test
 
 The validated development host is **Linux x86_64, Python 3.14.10**, with g++/ASan/UBSan, Node.js for JavaScript checks, and PlatformIO **6.2.0**. Other hosts need a compatible toolchain override in `platformio_override.ini`. WAdapter is already included in the repository; no submodule initialization is required.
@@ -211,7 +224,7 @@ python -m unittest discover -s tests -v
 pio run -e wthermostat
 ```
 
-The normal image is written to `build_output/firmware/wthermostat-1.25.0-labo.4.bin`; matching ELF/MAP files are in `build_output/map/`. An optional `platformio_override.ini` can change local settings; copying the sample also overrides `appversion`, so remove or edit that sample value if you want the release filename.
+The normal image is written to `build_output/firmware/wthermostat-1.25.0-labo.5.bin`; matching ELF/MAP files are in `build_output/map/`. An optional `platformio_override.ini` can change local settings; copying the sample also overrides `appversion`, so remove or edit that sample value if you want the release filename.
 
 | PlatformIO environment | Purpose |
 |---|---|
