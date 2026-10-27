@@ -100,7 +100,10 @@ class UiRenderingTests(unittest.TestCase):
             fields = {attrs.get("name"): attrs for _, attrs, _ in Document(self.pages[route]).fields}
             for name in ("p", "mp"):
                 self.assertEqual("password", fields[name]["type"])
-                self.assertEqual("___NOCHANGE___", fields[name]["value"])
+                self.assertEqual("" if name == "p" else "___NOCHANGE___", fields[name]["value"])
+                if name == "p":
+                    self.assertEqual("64", fields[name]["maxlength"])
+                    self.assertIn("checked", fields["keepWifiPassword"])
                 self.assertEqual(name, fields[name]["id"])
         self.assertRegex(self.pages["/thermostat-fine"], r"<option value='01' selected>")
 

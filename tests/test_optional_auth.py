@@ -17,7 +17,7 @@ class OptionalAuthTests(unittest.TestCase):
 '''
         text = NETWORK.read_text()
         source += text[text.index('const byte NETBITS1_MQTT'):text.index('\n#ifdef DEBUG', text.index('const byte NETBITS1_MQTT'))]
-        source += 'struct Probe{WSettings*settings;\n'+method(NETWORK, 'isAuthenticationRequired')+'\n};\n'
+        source += 'struct Probe{WSettings*settings;const char*getPassword(){return "test-pass";}\n'+method(NETWORK, 'isAuthenticationRequired')+'\n};\n'
         source += r'''
 int main(){
  Print output;WLog log(0,0,&output);

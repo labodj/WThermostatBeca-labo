@@ -7,6 +7,8 @@
 #include <Arduino.h>
 #include <WiFiClient.h>
 #include <ESP8266WiFi.h>
+#include <lwip/etharp.h>
+#include "WebAuthentication.h"
 #include <ESPAsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #ifdef ESP8266
@@ -25,6 +27,7 @@
 #include "WDevice.h"
 #include "WLed.h"
 #include "WSettings.h"
+#include "WWifiPassword.h"
 #include "WJsonParser.h"
 #include "WLog.h"
 #include "webserverHelper.h"
@@ -91,6 +94,7 @@ const byte NETBITS1_APFALLBACK = 4;
 const byte NETBITS1_MQTTSINGLEVALUES = 8;
 const byte NETBITS1_STATIC_IP = 16;
 const byte NETBITS1_AUTH_DISABLED = 32;
+const byte NETBITS1_RECOVERY_MIGRATED = 64;
 
 const char* PROP_IDX PROGMEM = "idx";
 const char* PROP_SSID PROGMEM = "ssid";
@@ -252,6 +256,7 @@ public:
 		bool result = true;
         updateWifiRecovery(now);
 		if (wifiModeDesired!=wifiModeRunning){
+            if (recoveryApActive) stopRecoveryAp();
 			if (wifiModeRunning == wnWifiMode::WIFIMODE_FALLBACK || wifiModeRunning == wnWifiMode::WIFIMODE_AP){
 				wlog->warning(F("WiFi: deactivating softApMode"));
 #ifndef MINIMAL
@@ -279,6 +284,7 @@ public:
 				wlog->notice(F("Start AccessPoint for configuration. SSID '%s'"), apSsid.c_str());
 				dnsApServer = new DNSServer();
 				WiFi.mode(WIFI_AP);
+                WiFi.softAPConfig(IPAddress(192,168,4,1), IPAddress(192,168,4,1), IPAddress(255,255,255,0));
 				WiFi.softAP(apSsid.c_str(), CONFIG_PASSWORD);
 				dnsApServer->setErrorReplyCode(DNSReplyCode::NoError);
 				dnsApServer->start(53, "*", WiFi.softAPIP());
@@ -291,7 +297,7 @@ public:
 				logHeap(PSTR("StationMode"));
 				wifiModeRunning = wifiModeDesired;
 				lastWifiConnect = 0;
-                wifiOfflineSince = now;
+                wifiOfflineSince = gatewayLastSeen = now;
 			}
 		}
 		if (wifiModeRunning == wnWifiMode::WIFIMODE_STATION && 
@@ -299,7 +305,7 @@ public:
 			logHeap(PSTR("BeforeWifiConnect"));
 			wlog->notice(F("WiFi: Connecting to '%s', using Hostname '%s'"), getSsid(), getHostName().c_str());
 
-			WiFi.mode(WIFI_STA);
+			WiFi.mode(recoveryApActive ? WIFI_AP_STA : WIFI_STA);
 			WiFi.hostname(getHostName());
 
             if (isStaticIpEnabled())
@@ -346,7 +352,7 @@ public:
 
 
 		if (isWebServerRunning()){
-			if (isSoftAP()) {
+			if ((isSoftAP() || recoveryApActive) && dnsApServer) {
 				dnsApServer->processNextRequest();
 			}
 			result = ((!isSoftAP()) && (!isUpdateRunning()));
@@ -666,7 +672,7 @@ public:
 	}
 
     bool isAuthenticationRequired() {
-        return (settings->getByte(PROP_NETBITS1) & NETBITS1_AUTH_DISABLED) == 0;
+        return strlen(getPassword()) && (settings->getByte(PROP_NETBITS1) & NETBITS1_AUTH_DISABLED) == 0;
     }
 
 	bool isSupportingMqttSingleValues() {
@@ -681,21 +687,105 @@ public:
 		return this->ssid->c_str();
 	}
 
+    void migrateRecoverySettings() {
+        const unsigned flags = settings->getByte(PROP_NETBITS1);
+        if (!(flags & NETBITS1_RECOVERY_MIGRATED)) {
+            unsigned migrated = flags | NETBITS1_RECOVERY_MIGRATED | NETBITS1_APFALLBACK;
+            if (!strlen(getPassword())) migrated |= NETBITS1_AUTH_DISABLED;
+            settings->setByte(PROP_NETBITS1, static_cast<byte>(migrated));
+            supportingApFallback->setBoolean(true);
+        }
+    }
+
+    void startLocalRecovery() {
+        localRecoveryActive = true;
+        localRecoveryStartedAt = millis();
+        wifiModeDesired = wnWifiMode::WIFIMODE_AP;
+    }
+
+    bool isLocalRecoveryRequest(AsyncWebServerRequest* request) {
+        return localRecoveryActive && isSoftAP() &&
+            (millis() - localRecoveryStartedAt < 300000UL || (isUpdateRunning() && request == updateRequest)) &&
+            request->client() && request->client()->localIP() == WiFi.softAPIP();
+    }
+
+    bool gatewayReachable(unsigned long now) {
+        if (now - gatewayLastCheck < 5000UL) return now - gatewayLastSeen < lockedApRecoveryDelay;
+        gatewayLastCheck = now;
+        bool reachable = false;
+        for (netif* interface = netif_list; interface; interface = interface->next) {
+            if (ip4_addr_get_u32(netif_ip4_addr(interface)) != static_cast<uint32_t>(WiFi.localIP())) continue;
+            const ip4_addr_t* gateway = netif_ip4_gw(interface);
+            struct eth_addr* mac = nullptr;
+            const ip4_addr_t* cached = nullptr;
+            reachable = !ip4_addr_isany_val(*gateway) &&
+                etharp_find_addr(interface, gateway, &mac, &cached) >= 0;
+            if (!ip4_addr_isany_val(*gateway)) etharp_request(interface, gateway);
+            break;
+        }
+        if (reachable) gatewayLastSeen = now;
+        return now - gatewayLastSeen < lockedApRecoveryDelay;
+    }
+
+    void stopRecoveryAp() {
+        WiFi.softAPdisconnect(true);
+        deleteDnsApServer();
+        recoveryApActive = false;
+    }
+
+    void startRecoveryAp(unsigned long now) {
+        if (recoveryApActive) return;
+        IPAddress apIp(192,168,4,1);
+        IPAddress stationAddress = WiFi.localIP(), stationSubnet = WiFi.subnetMask();
+        if (isStaticIpEnabled()) {
+            IPAddress configuredAddress, configuredSubnet;
+            if (configuredAddress.fromString(getStaticIp()) && configuredSubnet.fromString(getSubnetMask())) {
+                stationAddress = configuredAddress;
+                stationSubnet = configuredSubnet;
+            }
+        }
+        const uint32_t stationIp = stationAddress, stationMask = stationSubnet;
+        const uint32_t apMask = IPAddress(255,255,255,0);
+        for (const IPAddress& candidate : {IPAddress(192,168,4,1), IPAddress(172,31,255,1), IPAddress(10,255,255,1)}) {
+            const uint32_t address = candidate;
+            if ((address & stationMask) != (stationIp & stationMask) &&
+                (address & apMask) != (stationIp & apMask)) { apIp = candidate; break; }
+        }
+        if (!WiFi.mode(WIFI_AP_STA) || !WiFi.softAPConfig(apIp, apIp, IPAddress(255,255,255,0)) ||
+            !WiFi.softAP(getClientName(false).c_str(), CONFIG_PASSWORD)) {
+            wlog->warning(F("WiFi: recovery AP could not start"));
+            WiFi.softAPdisconnect(true);
+            return;
+        }
+        dnsApServer = new DNSServer();
+        dnsApServer->setErrorReplyCode(DNSReplyCode::NoError);
+        dnsApServer->start(53, "*", WiFi.softAPIP());
+        recoveryApActive = true;
+        recoveryApStartedAt = now;
+        wlog->warning(F("WiFi: recovery AP started; station connection remains enabled"));
+    }
+
     void updateWifiRecovery(unsigned long now) {
+        if (localRecoveryActive && now - localRecoveryStartedAt >= 300000UL && !isUpdateRunning()) {
+            localRecoveryActive = false;
+            if (strlen(getSsid())) wifiModeDesired = wnWifiMode::WIFIMODE_STATION;
+        }
         if (wifiModeRunning == wnWifiMode::WIFIMODE_STATION && wifiModeDesired == wnWifiMode::WIFIMODE_STATION) {
-            if (WiFi.status() == WL_CONNECTED) {
-                wifiOfflineSince = now;
-            } else if (!isUpdateRunning()) {
-                const bool lockedApTimedOut = bssidLocked && now - wifiOfflineSince >= lockedApRecoveryDelay;
 #ifdef MINIMAL
-                const bool fallbackEnabled = true;
+            const bool fallbackEnabled = true;
 #else
-                const bool fallbackEnabled = isSupportingApFallback();
+            const bool fallbackEnabled = isSupportingApFallback();
 #endif
-                if (lockedApTimedOut || (fallbackEnabled && connectFailCounter >= maxConnectFail)) {
-                    wlog->warning(F("WiFi: activating recovery AP; BSSID timeout: %d"), lockedApTimedOut);
-                    wifiModeDesired = wnWifiMode::WIFIMODE_FALLBACK;
-                }
+            const bool connected = WiFi.status() == WL_CONNECTED;
+            if (connected) wifiOfflineSince = now;
+            else gatewayLastSeen = now;
+            const bool staticFault = connected && isStaticIpEnabled() && fallbackEnabled && !gatewayReachable(now);
+            const bool offline = !connected && (fallbackEnabled || bssidLocked) && now - wifiOfflineSince >= lockedApRecoveryDelay;
+            if (!isUpdateRunning()) {
+                if (recoveryApActive && now - recoveryApStartedAt >= maxApRunTimeMinutes * 60UL * 1000) {
+                    stopRecoveryAp();
+                    wifiOfflineSince = gatewayLastSeen = now;
+                } else if (staticFault || offline) startRecoveryAp(now);
             }
         }
         if (wifiModeRunning == wnWifiMode::WIFIMODE_FALLBACK && !isUpdateRunning() && settingsFound &&
@@ -740,22 +830,22 @@ public:
     void loadBssid() {
         // Keep all legacy network/application offsets, including minimal firmware, unchanged.
         EEPROM.begin(EEPROM_SIZE);
-        bssidLocked = EEPROM.read(EEPROM_SIZE - 8) == 0xB5;
-        for (int i = 0; i < 6; ++i) bssid[i] = EEPROM.read(EEPROM_SIZE - 7 + i);
+        bssidLocked = EEPROM.read(LEGACY_EEPROM_SIZE - 8) == 0xB5;
+        for (int i = 0; i < 6; ++i) bssid[i] = EEPROM.read(LEGACY_EEPROM_SIZE - 7 + i);
         EEPROM.end();
     }
 
     bool saveBssid(const uint8_t* address, bool locked) {
         EEPROM.begin(EEPROM_SIZE);
-        EEPROM.write(EEPROM_SIZE - 8, locked ? 0xB5 : 0xFF);
-        for (int i = 0; i < 6; ++i) EEPROM.write(EEPROM_SIZE - 7 + i, address[i]);
+        EEPROM.write(LEGACY_EEPROM_SIZE - 8, locked ? 0xB5 : 0xFF);
+        for (int i = 0; i < 6; ++i) EEPROM.write(LEGACY_EEPROM_SIZE - 7 + i, address[i]);
         const bool saved = EEPROM.commit();
         EEPROM.end();
         return saved;
     }
 
 	const char* getPassword() {
-		return settings->getString(PROP_PASSWORD);
+		return extendedWifiPassword.length() ? extendedWifiPassword.c_str() : settings->getString(PROP_PASSWORD);
 	}
 
 	const char* getStaticIp() {
@@ -881,6 +971,32 @@ public:
 
 	}
 
+    static bool validStaticNetwork(const String& ipValue, const String& maskValue, const String& gatewayValue) {
+        IPAddress ip, mask, gateway;
+        if (!ip.fromString(ipValue) || !mask.fromString(maskValue) || !gateway.fromString(gatewayValue)) return false;
+        uint32_t address = 0, subnet = 0, router = 0;
+        for (int i = 0; i < 4; ++i) {
+            address = (address << 8) | static_cast<uint32_t>(ip[i]);
+            subnet = (subnet << 8) | static_cast<uint32_t>(mask[i]);
+            router = (router << 8) | static_cast<uint32_t>(gateway[i]);
+        }
+        const uint32_t hostMask = ~subnet;
+        return ip[0] > 0 && ip[0] < 224 && ip[0] != 127 && gateway[0] > 0 && gateway[0] < 224 && gateway[0] != 127 &&
+            subnet && hostMask >= 3 && !(hostMask & (hostMask + 1)) &&
+            (address & subnet) == (router & subnet) && address != router &&
+            (address & hostMask) && (address & hostMask) != hostMask &&
+            (router & hostMask) && (router & hostMask) != hostMask;
+    }
+
+    void requestAdminLogin(AsyncWebServerRequest* request) {
+        const String nonce = genRandomMD5(), opaque = genRandomMD5();
+        if (nonce.length() != 32 || opaque.length() != 32) { request->send(503); return; }
+        AsyncWebServerResponse* response = request->beginResponse(401);
+        if (!response) { request->send(503); return; }
+        response->addHeader("WWW-Authenticate", String("Digest realm=\"WThermostat\", qop=\"auth\", algorithm=MD5, charset=UTF-8, nonce=\"") + nonce + "\", opaque=\"" + opaque + "\"");
+        request->send(response);
+    }
+
     bool authorize(AsyncWebServerRequest* request, bool mutation = false) {
         if (request->isSent()) return false;
         if (request->hasHeader("Origin")) {
@@ -892,13 +1008,9 @@ public:
         }
         const bool provisioning = isSoftAP() && (strlen(getSsid()) == 0 ||
             (wifiModeRunning == wnWifiMode::WIFIMODE_AP && strlen(getPassword()) == 0));
-        if (!provisioning && isAuthenticationRequired()) {
-            if (!strlen(getPassword())) {
-                request->send(403, CT_TEXT_PLAIN, "Configure a WiFi password through the setup AP first");
-                return false;
-            }
+        if (!provisioning && !isLocalRecoveryRequest(request) && isAuthenticationRequired()) {
             if (!request->authenticate("admin", getPassword())) {
-                request->requestAuthentication("WThermostat");
+                requestAdminLogin(request);
                 return false;
             }
         }
@@ -1205,6 +1317,10 @@ private:
 	uint8_t bssid[6]{};
 	bool bssidLocked = false;
     unsigned long wifiOfflineSince = 0;
+    unsigned long gatewayLastCheck = 0, gatewayLastSeen = 0;
+    unsigned long recoveryApStartedAt = 0, localRecoveryStartedAt = 0;
+    bool recoveryApActive = false, localRecoveryActive = false;
+    String extendedWifiPassword;
 	WProperty *idx;
 	unsigned long lastWifiConnect;
 	WStringStream* responseStream = nullptr;
@@ -1520,6 +1636,7 @@ private:
 			// stop timer 
 			// resetWifiTimeout
 			if (wifiModeRunning == wnWifiMode_t::WIFIMODE_FALLBACK) this->apStartedAt=millis();
+            if (recoveryApActive && request->client() && request->client()->localIP() == WiFi.softAPIP()) recoveryApStartedAt = millis();
 			wlog->notice(F("Network config page"));
 			AsyncResponseStream* page = httpHeader(request, F("Network Configuration"));
 			printHttpCaption(page);
@@ -1528,11 +1645,15 @@ private:
 			page->printf_P(HTTP_TEXT_FIELD, PSTR("Hostname:"), "i", 16, htmlEscapedString(getIdx()).c_str());
 			page->printf_P(HTTP_TEXT_FIELD, PSTR("WiFi SSID (only 2.4G, name is case sensitive):"), "s", 32, htmlEscapedString(getSsid()).c_str());
 			page->printf_P(HTTP_TEXT_FIELD, PSTR("AP BSSID (optional, AA:BB:CC:DD:EE:FF):"), "bssid", 17, getBssid().c_str());
-            page->print(F("<p>Leave empty for automatic AP selection. With a BSSID set, a recovery AP opens after 2 minutes offline, even if AP fallback is disabled. The WLAN connection stays locked to the selected AP.</p>"));
-			page->printf_P(HTTP_PASSWORD_FIELD, PSTR("WiFi password:"), "p", "p", 32, (strlen(getPassword()) ? FORM_PW_NOCHANGE : ""), "p");
+            page->print(F("<p>Leave empty for automatic AP selection. With AP fallback enabled, a recovery AP opens after 2 minutes offline or a persistent static-IP gateway failure. A BSSID lock also enables offline recovery even if AP fallback is disabled. The WLAN connection stays locked to the selected AP.</p>"));
+			page->printf_P(HTTP_PASSWORD_FIELD, PSTR("WiFi password:"), "p", "p", 64, "", "p");
+            page->print(F("<input type='hidden' name='wifiPasswordMode' value='1'>"));
+            page->printf_P(HTTP_PAGE_CONFIGURATION_OPTION, "keepWifiPassword", (strlen(getPassword()) ? HTTP_CHECKED : ""), "", PSTR("Keep saved WiFi password"));
+            page->print(F("<p>To change the password, uncheck Keep saved WiFi password and enter the new value (8-63 bytes, or 64 hexadecimal digits).</p>"));
             page->print(F("<input type='hidden' name='authModePresent' value='1'>"));
             page->printf_P(HTTP_PAGE_CONFIGURATION_OPTION, "authRequired", (isAuthenticationRequired() ? HTTP_CHECKED : ""),
                 "", PSTR("Require administrator login (admin / WiFi password)"));
+            page->print(F("<p>Use the thermostat WiFi setup buttons to open a local recovery AP for 5 minutes if you forget the login password. Settings are preserved.</p>"));
             page->print(F("<p>Login is required by default. If disabled, anyone who can reach this device can change settings or upload firmware. POST and browser form protections remain enabled.</p>"));
 			page->printf_P(HTTP_PAGE_CONFIGURATION_OPTION, "apfb", (this->isSupportingApFallback() ? HTTP_CHECKED : ""),
 			"", HTTP_PAGE_CONFIIGURATION_OPTION_APFALLBACK);
@@ -1587,13 +1708,18 @@ private:
                 {"staticip",PROP_STATICIP},{"subnet",PROP_SUBNETMASK},{"gateway",PROP_GATEWAY},{"dns1",PROP_DNS1},{"dns2",PROP_DNS2}};
             for (const Field& field : fields) {
                 const String value = getValueOrEmpty(request, field.parameter);
-                if (!request->hasParam(field.parameter, true) || value.length() > settings->getSetting(field.setting)->getLength()) {
+                if (!request->hasParam(field.parameter, true) || value.length() > (strcmp(field.parameter, "p") == 0 ? 64U : settings->getSetting(field.setting)->getLength())) {
                     request->send(400, CT_TEXT_PLAIN, "Missing or oversized network setting"); return;
                 }
             }
             const String port = getValueOrEmpty(request, "mo"), topic = getValueOrEmpty(request, "mt");
-            const String password = getValueOrEmpty(request, "p");
-            if (authenticationRequired && !(password == FORM_PW_NOCHANGE ? strlen(getPassword()) : password.length())) {
+            const bool keepPassword = request->hasParam("wifiPasswordMode", true)
+                ? getValueOrEmpty(request, "keepWifiPassword") == "true" : getValueOrEmpty(request, "p") == FORM_PW_NOCHANGE;
+            const String password = keepPassword ? String(getPassword()) : getValueOrEmpty(request, "p");
+            if (!keepPassword && !WWifiPassword::valid(password)) {
+                request->send(400, CT_TEXT_PLAIN, "WiFi password must be empty, 8-63 bytes, or 64 hexadecimal digits"); return;
+            }
+            if (authenticationRequired && !password.length()) {
                 request->send(400, CT_TEXT_PLAIN, "Set a WiFi password or disable administrator login"); return;
             }
             char* end;
@@ -1602,11 +1728,10 @@ private:
                 request->send(400, CT_TEXT_PLAIN, "Invalid MQTT port or topic"); return;
             }
             if (getValueOrEmpty(request, "staticIpEnabled") == "true") {
+                if (!validStaticNetwork(getValueOrEmpty(request, "staticip"), getValueOrEmpty(request, "subnet"), getValueOrEmpty(request, "gateway"))) {
+                    request->send(400, CT_TEXT_PLAIN, "Invalid static IPv4 address, subnet mask or gateway"); return;
+                }
                 IPAddress address;
-                for (const char* parameter : {"staticip", "subnet", "gateway"})
-                    if (!address.fromString(getValueOrEmpty(request, parameter))) {
-                        request->send(400, CT_TEXT_PLAIN, "Invalid static IPv4 configuration"); return;
-                    }
                 for (const char* parameter : {"dns1", "dns2"}) {
                     const String value = getValueOrEmpty(request, parameter);
                     if (value.length() && !address.fromString(value)) {
@@ -1623,14 +1748,18 @@ private:
 #endif			
 			this->idx->setString(getValueOrEmpty(request, "i").c_str());
 			this->ssid->setString(getValueOrEmpty(request, "s").c_str());
-			settings->setString(PROP_PASSWORD,  (getValueOrEmpty(request, "p").equals(FORM_PW_NOCHANGE) ? getPassword() : getValueOrEmpty(request, "p").c_str())) ;
+			settings->setString(PROP_PASSWORD, password.c_str());
+            if (!WWifiPassword::save(getSsid(), password)) {
+                request->send(500, CT_TEXT_PLAIN, "Failed to save WiFi password; reconnect through local recovery if needed"); return;
+            }
+            extendedWifiPassword = password.length() > 32 ? password : String();
 			settings->setString(PROP_MQTTSERVER, getValueOrEmpty(request, "ms").c_str());
 			String mqtt_port = getValueOrEmpty(request, "mo");
 			settings->setString(PROP_MQTTPORT, (mqtt_port != "" ? mqtt_port.c_str() : "1883"));
 			settings->setString(PROP_MQTTUSER, getValueOrEmpty(request, "mu").c_str());
 			settings->setString(PROP_MQTTPASSWORD, getValueOrEmpty(request, "mp").equals(FORM_PW_NOCHANGE) ? getMqttPassword() : getValueOrEmpty(request, "mp").c_str());
 			this->mqttBaseTopic->setString(getValueOrEmpty(request, "mt").c_str());
-			byte nb1 = 0;
+			byte nb1 = NETBITS1_RECOVERY_MIGRATED;
 			if (getValueOrEmpty(request, "mq").equals("true")) nb1 |= NETBITS1_MQTT;
 			if (getValueOrEmpty(request, "mqhass").equals("true")) nb1 |= NETBITS1_HASS;
 			if (getValueOrEmpty(request, "apfb").equals("true")) nb1 |= NETBITS1_APFALLBACK;
@@ -2008,7 +2137,7 @@ private:
 			(settingsOld && settingsOld->existsSetting(PROP_IDX) ? settingsOld->getString(PROP_IDX) : this->getClientName(true).c_str()));
 		this->ssid = settings->setString(PROP_SSID, 32, (settingsOld && settingsOld->existsSetting(PROP_SSID) ? settingsOld->getString(PROP_SSID) : ""));
 		settings->setString(PROP_PASSWORD, 32, (settingsOld && settingsOld->existsSetting(PROP_PASSWORD) ? settingsOld->getString(PROP_PASSWORD) : ""));
-		this->netBits1 = settings->setByte(PROP_NETBITS1, (settingsOld && settingsOld->getByte(PROP_NETBITS1) ? settingsOld->getByte(PROP_NETBITS1) : (NETBITS1_MQTT | NETBITS1_HASS)));
+		this->netBits1 = settings->setByte(PROP_NETBITS1, (settingsOld && settingsOld->existsSetting(PROP_NETBITS1) ? settingsOld->getByte(PROP_NETBITS1) : (NETBITS1_MQTT | NETBITS1_HASS)));
 		settings->setString(PROP_MQTTSERVER, 32, (settingsOld && settingsOld->existsSetting(PROP_MQTTSERVER) ? settingsOld->getString(PROP_MQTTSERVER) : ""));
 		settings->setString(PROP_MQTTPORT, 5, (settingsOld && settingsOld->existsSetting(PROP_MQTTPORT) ? settingsOld->getString(PROP_MQTTPORT) : "1883"));
 		settings->setString(PROP_MQTTUSER, 16, (settingsOld && settingsOld->existsSetting(PROP_MQTTUSER) ? settingsOld->getString(PROP_MQTTUSER) : ""));
@@ -2083,6 +2212,7 @@ private:
 
 		EEPROM.end();
         loadBssid();
+        extendedWifiPassword = WWifiPassword::load(getSsid(), settings->getString(PROP_PASSWORD));
 		return settingsStored;
 	}
 

@@ -98,7 +98,7 @@ void setup() {
     network->addDevice(becaDevice);
 
     becaDevice->setOnConfigurationRequest([]() {
-        network->setDesiredModeAp();
+        network->startLocalRecovery();
         return true;
     });
     becaDevice->setOnPowerButtonOn([]() {
@@ -116,6 +116,7 @@ void setup() {
     network->addDevice(logDevice);
     network->log()->trace(F("Loading LogDevice Done (%d)"), ESP.getMaxFreeBlockSize());
 
+    network->migrateRecoverySettings();
     if (network->getSettings()->settingsNeedsUpdate()){
         network->deleteSettingsOld();
         network->log()->trace(F("Writing Config (%d)"), ESP.getMaxFreeBlockSize());

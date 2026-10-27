@@ -150,16 +150,23 @@ struct AsyncWebServerRequest{
     bool hasParam(const char*s,bool){return params.count(s);}Parameter*getParam(const char*s,bool){return &params.at(s);}
     String host(){return hostname;}String url(){return path;}int method(){return verb;}
     bool authenticate(const char*,const char*){return authenticated;}
+    struct Client{int ip=1;int localIP(){return ip;}} connection;
+    Client*client(){return &connection;}
     void requestAuthentication(const char*){send(401);}
 };
+struct Wifi{int softAPIP(){return 1;}} WiFi;
 struct Probe{
+    bool updating=false;AsyncWebServerRequest*updateRequest=nullptr;
+    bool isUpdateRunning(){return updating;}
+    bool localRecoveryActive=false;unsigned long localRecoveryStartedAt=0;
+    void requestAdminLogin(AsyncWebServerRequest* r){r->requestAuthentication("WThermostat");}
     struct HttpBody{size_t capacity,received;char data[1];};
     String csrfToken="token",ssid="wifi",password="test-pass";bool ap=false,authRequired=true;
     bool isAuthenticationRequired(){return authRequired;}
     wnWifiMode wifiModeRunning=wnWifiMode::WIFIMODE_STATION;
     bool isSoftAP(){return ap;}const char*getSsid(){return ssid.c_str();}const char*getPassword(){return password.c_str();}
 '''
-        for name in ["authorize", "handlePutBody", "handlePutBodyDone"]:
+        for name in ["isLocalRecoveryRequest", "authorize", "handlePutBody", "handlePutBodyDone"]:
             source += method(NETWORK, name) + "\n"
         source += r'''
 };
@@ -180,6 +187,17 @@ int main(){
     AsyncWebServerRequest setup;setup.authenticated=false;network.ap=true;network.ssid="";assert(network.authorize(&setup));
     network.ssid="wifi";network.wifiModeRunning=wnWifiMode::WIFIMODE_FALLBACK;assert(!network.authorize(&setup)&&setup.status==401);
     setup.sent=false;setup.authenticated=true;assert(network.authorize(&setup));
+    network.localRecoveryActive=true;network.localRecoveryStartedAt=100;testMillis=100;
+    setup.sent=false;setup.authenticated=false;network.wifiModeRunning=wnWifiMode::WIFIMODE_AP;
+    assert(network.authorize(&setup));
+    setup.connection.ip=2;assert(!network.authorize(&setup)&&setup.status==401);
+    setup.sent=false;setup.connection.ip=1;testMillis=300100;assert(!network.authorize(&setup)&&setup.status==401);
+    network.updating=true;network.updateRequest=&setup;setup.sent=false;assert(network.authorize(&setup));
+    AsyncWebServerRequest newcomer;newcomer.authenticated=false;assert(!network.authorize(&newcomer)&&newcomer.status==401);
+    network.updating=false;network.updateRequest=nullptr;
+    testMillis=100;setup.sent=false;setup.verb=HTTP_POST;assert(!network.authorize(&setup,true)&&setup.status==403);
+    setup.sent=false;setup.params["csrf"]={"token"};assert(network.authorize(&setup,true));
+    network.localRecoveryActive=false;
     network.authRequired=false;network.ap=false;network.password="";
     AsyncWebServerRequest open;open.authenticated=false;assert(network.authorize(&open));
     open.verb=HTTP_POST;assert(!network.authorize(&open,true)&&open.status==403);

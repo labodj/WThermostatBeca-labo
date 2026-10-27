@@ -49,6 +49,7 @@ struct AsyncResponseStream:Print{
     void addHeader(const char*,const char*){}
 };
 struct AsyncWebServerRequest{
+    struct Client{int localIP(){return 1;}};Client*client(){return nullptr;}
     AsyncResponseStream response;
     AsyncResponseStream*beginResponseStream(const char*,unsigned capacity){
         assert(!HEAP_BUDGET || capacity<=HEAP_BUDGET);
@@ -60,7 +61,7 @@ struct AsyncWebServerRequest{
 #include "lib/WAdapter/WAdapter/WPage.h"
 struct Ip{bool isSet()const{return true;}String toString()const{return "192.0.2.10";}};
 using IPAddress=Ip;
-struct Wifi{Ip localIP(){return {};}Ip subnetMask(){return {};}Ip gatewayIP(){return {};}Ip dnsIP(int){return {};}
+struct Wifi{int softAPIP(){return 1;}Ip localIP(){return {};}Ip subnetMask(){return {};}Ip gatewayIP(){return {};}Ip dnsIP(int){return {};}
 String macAddress(){return "AA:BB:CC:DD:EE:FF";}String BSSIDstr(){return "02:11:22:33:44:55";}int RSSI(){return -62;}}WiFi;
 struct Chip{unsigned getChipId(){return 12345;}unsigned getFlashChipId(){return 123;}
 unsigned getFlashChipSize(){return 1048576;}unsigned getFlashChipRealSize(){return 1048576;}
@@ -91,6 +92,7 @@ struct Net{
     bool isSupportingMqttSingleValues(){return false;}bool isSupportingApFallback(){return true;}
     bool isAuthenticationRequired(){return true;}
     bool isStaticIpEnabled(){return staticEnabled;}bool isSoftAP(){return false;}
+    bool recoveryApActive=false;unsigned long recoveryApStartedAt=0;
     const char*getSsid(){return "Example Wi-Fi";}const char*getPassword(){return "fake-password";}
     String getBssid(){return bssidLocked ? "02:11:22:33:44:55" : "";}bool isWifiConnected(){return true;}
     const char*getStaticIp(){return address.c_str();}const char*getSubnetMask(){return "255.255.255.0";}

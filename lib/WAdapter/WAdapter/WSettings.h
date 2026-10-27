@@ -12,7 +12,8 @@ const byte FLAG_OPTIONS_NETWORK_V1 = 0x64; //1.09
 const byte FLAG_OPTIONS_NETWORK_V2 = 0x65; //PR2  (added static IP)
 const byte FLAG_OPTIONS_NETWORK_V3 = 0x66; //1.23 (longer port)
 const byte FLAG_OPTIONS_NETWORK_CURRENT = FLAG_OPTIONS_NETWORK_V3;
-const int EEPROM_SIZE = 512;
+const int LEGACY_EEPROM_SIZE = 512;
+const int EEPROM_SIZE = 640;
 int startAddressReadOffset = 2;
 int startAddressSaveOffset = 2;
 

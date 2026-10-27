@@ -29,6 +29,7 @@ class BssidTests(unittest.TestCase):
 #include "Stream.h"
 #include "lib/WAdapter/WAdapter/WStringProperty.h"
 #include "lib/WAdapter/WAdapter/WSettings.h"
+#include "lib/WAdapter/WAdapter/WWifiPassword.h"
 #include <map>
 const char* CT_TEXT_PLAIN="text/plain",*FORM_PW_NOCHANGE="___NOCHANGE___";
 struct AsyncWebServerRequest{
@@ -37,11 +38,14 @@ struct AsyncWebServerRequest{
     void send(int code,const char*,const char*){status=code;}
 };
 String getValueOrEmpty(AsyncWebServerRequest* request,const char* name){auto it=request->fields.find(name);return it==request->fields.end()?String(""):it->second;}
-struct IPAddress{bool fromString(const String& value){return value!="bad";}};
+struct IPAddress{byte octets[4]{};byte operator[](unsigned i){return octets[i];}
+ bool fromString(const String& value){unsigned a,b,c,d;char tail;
+ if(sscanf(value.c_str(),"%u.%u.%u.%u%c",&a,&b,&c,&d,&tail)!=4||a>255||b>255||c>255||d>255)return false;
+ octets[0]=a;octets[1]=b;octets[2]=c;octets[3]=d;return true;}};
 struct Wifi{
-    bool locked=false;uint8_t selected[6]{};unsigned begins=0;int channel=-1;
+    String lastPassword;bool locked=false;uint8_t selected[6]{};unsigned begins=0;int channel=-1;
     void begin(const char* ssid,const char* password,int ch,const uint8_t* address){
-        assert(!strcmp(ssid,"room-wifi")&&!strcmp(password,"password"));
+        assert(!strcmp(ssid,"room-wifi"));lastPassword=password;
         locked=address;channel=ch;++begins;if(address)memcpy(selected,address,6);
     }
 }WiFi;
@@ -51,23 +55,25 @@ struct Probe{
     Print output;WLog log{0,0,&output};WLog*wlog=&log;
     WSettings storage{&log,0xf1,false};WSettings*settings=&storage;
     WProperty*idx=nullptr,*ssid=nullptr,*mqttBaseTopic=nullptr;
+    WProperty apFallback{"ap","AP",BOOLEAN};WProperty*supportingApFallback=&apFallback;
+    String extendedWifiPassword;
     uint8_t bssid[6]{};bool bssidLocked=false,restarted=false;
     Probe(bool minimal=false){settings->reallyReadSettings=false;
 '''
         source += '\n'.join(layout[:network_fields])
         source += 'if(!minimal){' + '\n'.join(layout[network_fields:]) + '}'
         source += r'''
-        assert(settings->getCurrentAddress()+2<=EEPROM_SIZE-8);
+        assert(settings->getCurrentAddress()+2<=LEGACY_EEPROM_SIZE-8);
         idx=settings->getSetting(PROP_IDX);ssid=settings->getSetting(PROP_SSID);mqttBaseTopic=settings->getSetting(PROP_MQTTTOPIC);
         settings->setString(PROP_SSID,"room-wifi");settings->setString(PROP_PASSWORD,"password");
-        settings->setString(PROP_MQTTPORT,"1883");settings->setByte(PROP_NETBITS1,NETBITS1_MQTT|NETBITS1_HASS);
+        settings->setString(PROP_MQTTPORT,"1883");settings->setByte(PROP_NETBITS1,NETBITS1_MQTT|NETBITS1_HASS|NETBITS1_RECOVERY_MIGRATED);
     }
-    const char*getSsid(){return ssid->c_str();}const char*getPassword(){return settings->getString(PROP_PASSWORD);}
+    const char*getSsid(){return ssid->c_str();}
     const char*getMqttPassword(){return settings->getString(PROP_MQTTPASSWORD);}
     bool isWebServerRunning(){return true;}
     void restart(AsyncWebServerRequest*,const __FlashStringHelper*){restarted=true;}
 '''
-        for name in ['getBssid', 'parseBssid', 'connectWifi', 'loadBssid', 'saveBssid', 'isAuthenticationRequired', 'handleHttpSave']:
+        for name in ['getPassword', 'migrateRecoverySettings', 'getBssid', 'parseBssid', 'connectWifi', 'loadBssid', 'saveBssid', 'isAuthenticationRequired', 'validStaticNetwork', 'handleHttpSave']:
             source += method(NETWORK, name) + '\n'
         source += r'''
 };
@@ -88,10 +94,10 @@ int main(){
         assert(!Probe::parseBssid(bad,address));for(byte value:address)assert(value==0xa5);
     }
     assert(Probe::parseBssid("02:11:22:33:44:55",address));assert(p.saveBssid(address,true));
-    for(unsigned i=0;i<EEPROM_SIZE-8;++i)assert(EEPROM.bytes[i]==original[i]);assert(EEPROM.bytes.back()==original.back());
+    for(unsigned i=0;i<LEGACY_EEPROM_SIZE-8;++i)assert(EEPROM.bytes[i]==original[i]);assert(EEPROM.bytes.back()==original.back());
     const auto locked=EEPROM.bytes;p.loadBssid();assert(p.bssidLocked&&p.getBssid()=="02:11:22:33:44:55");
     for(unsigned retry=0;retry<5;++retry){WiFi.locked=false;p.connectWifi();assert(WiFi.locked&&WiFi.channel==0&&!memcmp(WiFi.selected,address,6));}
-    for(int i=0;i<6;++i)EEPROM.bytes[EEPROM_SIZE-7+i]=0xff;
+    for(int i=0;i<6;++i)EEPROM.bytes[LEGACY_EEPROM_SIZE-7+i]=0xff;
     p.loadBssid();unsigned begins=WiFi.begins;p.connectWifi();assert(p.bssidLocked&&WiFi.begins==begins);
     assert(p.saveBssid(address,true));p.loadBssid();
     p.settings->save();assert(EEPROM.bytes==locked);
@@ -104,7 +110,7 @@ int main(){
     auto changed=request();changed.fields["bssid"]="02:aa:bb:cc:dd:ee";p.handleHttpSave(&changed);assert(p.restarted);
     p.loadBssid();assert(p.getBssid()=="02:AA:BB:CC:DD:EE");p.connectWifi();assert(WiFi.locked&&WiFi.selected[1]==0xaa);
     auto clear=request();clear.fields["bssid"]="";p.handleHttpSave(&clear);p.loadBssid();assert(!p.bssidLocked);p.connectWifi();assert(!WiFi.locked);
-    for(unsigned i=0;i<EEPROM_SIZE-8;++i)assert(EEPROM.bytes[i]==original[i]);
+    for(unsigned i=0;i<LEGACY_EEPROM_SIZE-8;++i)assert(EEPROM.bytes[i]==original[i]);
     auto disable=request();disable.fields["authModePresent"]="1";p.handleHttpSave(&disable);
     assert(!p.isAuthenticationRequired()&&(p.settings->getByte(PROP_NETBITS1)&NETBITS1_AUTH_DISABLED));
     auto legacy=request();p.handleHttpSave(&legacy);assert(!p.isAuthenticationRequired());
@@ -115,6 +121,45 @@ int main(){
     assert(passwordless.status==400&&EEPROM.bytes==protectedBytes);
     passwordless=request();passwordless.fields["p"]="";passwordless.fields["authModePresent"]="1";p.handleHttpSave(&passwordless);
     assert(!p.isAuthenticationRequired()&&p.getPassword()[0]==0);
+    // Every migrated bit pattern enables fallback exactly once and preserves all other bytes.
+    for(unsigned flags=0;flags<64;++flags){
+        p.settings->setString(PROP_PASSWORD,"password");p.settings->setByte(PROP_NETBITS1,flags);
+        const auto before=EEPROM.bytes;p.migrateRecoverySettings();
+        assert(p.settings->getByte(PROP_NETBITS1)==(flags|NETBITS1_APFALLBACK|NETBITS1_RECOVERY_MIGRATED));
+        for(unsigned i=0;i<EEPROM.bytes.size();++i)if(i!=82)assert(EEPROM.bytes[i]==before[i]);
+        p.settings->setByte(PROP_NETBITS1,(flags|NETBITS1_RECOVERY_MIGRATED)&~NETBITS1_APFALLBACK);
+        const auto chosen=EEPROM.bytes;p.migrateRecoverySettings();assert(EEPROM.bytes==chosen);
+    }
+    p.settings->setString(PROP_PASSWORD,"");p.settings->setByte(PROP_NETBITS1,0);p.migrateRecoverySettings();
+    assert(!p.isAuthenticationRequired()&&(p.settings->getByte(PROP_NETBITS1)&NETBITS1_AUTH_DISABLED));
+    const String punctuation=" !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ ";
+    for(const String& secret:{String(std::string(8,'a')),String(std::string(32,'b')),String(std::string(33,'c')),String(std::string(63,'d')),String(std::string(64,'A')),
+        String("___NOCHANGE___"),punctuation,String("èéàü☃-long-password-012345678901234567890")}){
+        auto save=request();save.fields["wifiPasswordMode"]="1";save.fields["p"]=secret;
+        p.handleHttpSave(&save);assert(!save.status&&!strcmp(p.getPassword(),secret.c_str()));
+        const auto saved=EEPROM.bytes;
+        p.extendedWifiPassword=WWifiPassword::load(p.getSsid(),p.settings->getString(PROP_PASSWORD));
+        assert(!strcmp(p.getPassword(),secret.c_str()));p.connectWifi();assert(WiFi.lastPassword==secret);
+        p.settings->save();assert(EEPROM.bytes==saved);
+        auto keep=request();keep.fields["wifiPasswordMode"]="1";keep.fields["keepWifiPassword"]="true";keep.fields["p"]="";
+        p.handleHttpSave(&keep);assert(!keep.status&&!strcmp(p.getPassword(),secret.c_str()));
+    }
+    for(const String& secret:{String(std::string(7,'a')),String(std::string(65,'a')),String(std::string(64,'z')),String("ab\0cd12345",10)}){
+        const auto before=EEPROM.bytes;auto invalid=request();invalid.fields["wifiPasswordMode"]="1";invalid.fields["p"]=secret;
+        p.handleHttpSave(&invalid);assert(invalid.status==400&&EEPROM.bytes==before);
+    }
+    assert(WWifiPassword::load("different-ssid",p.settings->getString(PROP_PASSWORD))=="");
+    EEPROM.bytes[530]^=1;assert(WWifiPassword::load(p.getSsid(),p.settings->getString(PROP_PASSWORD))=="");
+    // Reject routing mistakes before any EEPROM write.
+    auto ip=request();ip.fields["staticIpEnabled"]="true";ip.fields["staticip"]="192.168.1.20";
+    ip.fields["subnet"]="255.255.255.0";ip.fields["gateway"]="192.168.2.1";
+    auto before=EEPROM.bytes;p.handleHttpSave(&ip);assert(ip.status==400&&EEPROM.bytes==before);
+    ip.fields["gateway"]="192.168.1.1";ip.status=0;p.handleHttpSave(&ip);assert(!ip.status);
+    for(const char* mask:{"0.0.0.0","255.255.0.255","255.255.255.255","255.255.255.254"}){
+      ip.status=0;ip.fields["subnet"]=mask;before=EEPROM.bytes;p.handleHttpSave(&ip);assert(ip.status==400&&EEPROM.bytes==before);}
+    assert(!Probe::validStaticNetwork("192.168.1.0","255.255.255.0","192.168.1.1"));
+    assert(!Probe::validStaticNetwork("192.168.1.255","255.255.255.0","192.168.1.1"));
+    assert(!Probe::validStaticNetwork("192.168.1.1","255.255.255.0","192.168.1.1"));
     puts("PASS BSSID parser, atomic HTTP validation, EEPROM preservation, minimal/normal and reconnect lock");
 }
 '''

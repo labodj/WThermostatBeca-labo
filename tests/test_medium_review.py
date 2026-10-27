@@ -169,66 +169,91 @@ int main(){
         constants = text[start:text.index('WiFiEventHandler', start)]
         loop = method(NETWORK, 'loop')
         self.assertIn('updateWifiRecovery(now);', loop)
+        self.assertIn('WiFi.mode(recoveryApActive ? WIFI_AP_STA : WIFI_STA)', loop)
         transition = loop[loop.index('if (wifiModeDesired!=wifiModeRunning)'):loop.index('if (wifiModeRunning == wnWifiMode::WIFIMODE_STATION &&')]
         source = r'''
 #include "Arduino.h"
-const int WL_CONNECTED=3,WIFI_AP=2;
+const int WL_CONNECTED=3,WIFI_AP=2,WIFI_AP_STA=3;
 const char*CONFIG_PASSWORD="fixture-ap-key";
-struct Wifi{int connected=0,modeValue=0;unsigned aps=0,disconnects=0;bool selectedLock=false;byte selected[6]{};
- int status(){return connected;}void disconnect(){++disconnects;}void softAPdisconnect(){}void mode(int m){modeValue=m;}
- void softAP(const char*,const char*){++aps;}int softAPIP(){return 1;}
+struct IPAddress{uint32_t value;IPAddress(uint32_t v=0):value(v){}IPAddress(byte a,byte b,byte c,byte d):value(a|(b<<8)|(c<<16)|(uint32_t(d)<<24)){}
+ byte operator[](unsigned i)const{return value>>(i*8);}operator uint32_t()const{return value;}
+ bool fromString(const char* s){unsigned a,b,c,d;if(sscanf(s,"%u.%u.%u.%u",&a,&b,&c,&d)!=4)return false;*this=IPAddress(a,b,c,d);return true;}};
+struct Wifi{int connected=0,modeValue=0;unsigned aps=0,disconnects=0;bool selectedLock=false,apOk=true;byte selected[6]{};
+ IPAddress ip{192,168,1,20},apIp{192,168,4,1};
+ int status(){return connected;}void disconnect(){++disconnects;}void softAPdisconnect(bool=false){}bool mode(int m){modeValue=m;return true;}
+ bool softAP(const char*,const char*){++aps;return apOk;}IPAddress softAPIP(){return apIp;}IPAddress localIP(){return ip;}IPAddress subnetMask(){return IPAddress(255,255,255,0);}
+ bool softAPConfig(IPAddress ip,IPAddress,IPAddress){apIp=ip;return true;}
  void begin(const char*,const char*,int channel,const uint8_t* bssid){assert(channel==0);selectedLock=bssid;if(bssid)memcpy(selected,bssid,6);}
 }WiFi;
+struct ip4_addr_t{uint32_t addr;};struct eth_addr{};
+struct netif{netif*next=nullptr;ip4_addr_t ip{WiFi.ip},gateway{IPAddress(192,168,1,1)};};
+netif station;netif*netif_list=&station;bool cachedGateway=true;unsigned arpRequests=0;
+uint32_t ip4_addr_get_u32(const ip4_addr_t*p){return p->addr;}bool ip4_addr_isany_val(ip4_addr_t ip){return !ip.addr;}
+const ip4_addr_t*netif_ip4_addr(netif*p){return &p->ip;}const ip4_addr_t*netif_ip4_gw(netif*p){return &p->gateway;}
+int etharp_find_addr(netif*,const ip4_addr_t*,eth_addr**,const ip4_addr_t**){return cachedGateway?0:-1;}
+void etharp_request(netif*,const ip4_addr_t*){++arpRequests;}
 enum class DNSReplyCode{NoError};
-struct DNSServer{void setErrorReplyCode(DNSReplyCode){}void start(int,const char*,int){}};
+struct DNSServer{void setErrorReplyCode(DNSReplyCode){}void start(int,const char*,IPAddress){}};
 struct Log{template<class...T>void warning(T...){}template<class...T>void notice(T...){}template<class...T>void trace(T...){}};
 '''+constants+r'''
 struct Probe{
- Log logger;Log*wlog=&logger;bool bssidLocked=true,fallback=false,updating=false,settingsFound=true;
+ Log logger;Log*wlog=&logger;bool bssidLocked=true,fallback=false,updating=false,settingsFound=true,staticIp=false;
  wnWifiMode wifiModeRunning=WIFIMODE_STATION,wifiModeDesired=WIFIMODE_STATION;
  unsigned long wifiOfflineSince=0,apStartedAt=0,lastWifiConnect=0,lastMqttConnect=0;int connectFailCounter=0;
+ unsigned long gatewayLastCheck=0,gatewayLastSeen=0,recoveryApStartedAt=0,localRecoveryStartedAt=0;
+ bool recoveryApActive=false,localRecoveryActive=false;
  DNSServer*dnsApServer=nullptr;uint8_t bssid[6]={2,0x11,0x22,0x33,0x44,0x55};
  ~Probe(){deleteDnsApServer();}void deleteDnsApServer(){delete dnsApServer;dnsApServer=nullptr;}
- bool isSupportingApFallback(){return fallback;}bool isUpdateRunning(){return updating;}
+ bool isSupportingApFallback(){return fallback;}bool isUpdateRunning(){return updating;}bool isStaticIpEnabled(){return staticIp;}const char*getStaticIp(){return "192.168.4.20";}const char*getSubnetMask(){return "255.255.0.0";}
  void disconnectMqtt(){}void logHeap(const char*){}String getClientName(bool){return "fixture";}
  const char*getSsid(){return "fixture-ssid";}const char*getPassword(){return "fixture-password";}
 '''
-        for name in ['updateWifiRecovery', 'getBssid', 'parseBssid', 'connectWifi']:
+        for name in ['updateWifiRecovery', 'gatewayReachable', 'startRecoveryAp', 'stopRecoveryAp', 'startLocalRecovery', 'getBssid', 'parseBssid', 'connectWifi']:
             source += method(NETWORK, name) + '\n'
         source += 'void transition(unsigned long now){' + transition + '}\n};\n'
         source += r'''
 int main(){
     Probe p;p.wifiOfflineSince=5000;
-    p.updateWifiRecovery(5000+lockedApRecoveryDelay-1);assert(p.wifiModeDesired==WIFIMODE_STATION);
-    p.updating=true;p.updateWifiRecovery(5000+lockedApRecoveryDelay);assert(p.wifiModeDesired==WIFIMODE_STATION);
-    p.updating=false;p.updateWifiRecovery(5000+lockedApRecoveryDelay);assert(p.wifiModeDesired==WIFIMODE_FALLBACK);
-    testMillis=5000+lockedApRecoveryDelay;p.transition(testMillis);
-    assert(p.wifiModeRunning==WIFIMODE_FALLBACK&&WiFi.modeValue==WIFI_AP&&WiFi.aps==1&&p.dnsApServer&&p.apStartedAt==testMillis);
-    const unsigned long end=p.apStartedAt+maxApRunTimeMinutes*60UL*1000;
-    p.updateWifiRecovery(end);assert(p.wifiModeDesired==WIFIMODE_FALLBACK);
-    p.updating=true;p.updateWifiRecovery(end+1);assert(p.wifiModeDesired==WIFIMODE_FALLBACK);
-    p.updating=false;p.settingsFound=false;p.updateWifiRecovery(end+1);assert(p.wifiModeDesired==WIFIMODE_FALLBACK);
-    p.settingsFound=true;p.connectFailCounter=99;p.updateWifiRecovery(end+1);assert(p.wifiModeDesired==WIFIMODE_STATION&&p.connectFailCounter==0);
-    testMillis=end+1;p.transition(testMillis);p.connectWifi();
-    assert(p.wifiModeRunning==WIFIMODE_STATION&&!p.dnsApServer&&p.wifiOfflineSince==testMillis&&WiFi.selectedLock&&!memcmp(WiFi.selected,p.bssid,6));
-    p.updateWifiRecovery(testMillis+lockedApRecoveryDelay-1);assert(p.wifiModeDesired==WIFIMODE_STATION);
-    p.updateWifiRecovery(testMillis+lockedApRecoveryDelay);assert(p.wifiModeDesired==WIFIMODE_FALLBACK);
-    p.wifiModeDesired=WIFIMODE_STATION;WiFi.connected=WL_CONNECTED;p.connectFailCounter=99;
-    p.updateWifiRecovery(1000000);assert(p.wifiModeDesired==WIFIMODE_STATION&&p.wifiOfflineSince==1000000);
-    WiFi.connected=0;p.connectFailCounter=0;p.updateWifiRecovery(1000001);assert(p.wifiModeDesired==WIFIMODE_STATION);
-    p.wifiModeDesired=WIFIMODE_AP;p.updateWifiRecovery(2000000);assert(p.wifiModeDesired==WIFIMODE_AP);
-    p.wifiModeDesired=WIFIMODE_STATION;p.wifiOfflineSince=ULONG_MAX-60000UL;
-    p.updateWifiRecovery(p.wifiOfflineSince+lockedApRecoveryDelay-1);assert(p.wifiModeDesired==WIFIMODE_STATION);
-    p.updateWifiRecovery(p.wifiOfflineSince+lockedApRecoveryDelay);assert(p.wifiModeDesired==WIFIMODE_FALLBACK);
-    p.wifiModeDesired=WIFIMODE_STATION;p.bssidLocked=false;p.connectFailCounter=maxConnectFail;p.fallback=false;
-    p.updateWifiRecovery(3000000);
+    p.updateWifiRecovery(124999);assert(!p.recoveryApActive);
+    p.updating=true;p.updateWifiRecovery(125000);assert(!p.recoveryApActive);
+    p.updating=false;p.updateWifiRecovery(125000);
+    assert(p.recoveryApActive&&p.wifiModeDesired==WIFIMODE_STATION&&WiFi.modeValue==WIFI_AP_STA&&WiFi.disconnects==0&&p.dnsApServer);
+    for(int i=0;i<5;++i){p.connectWifi();assert(WiFi.selectedLock&&!memcmp(WiFi.selected,p.bssid,6));}
+    const unsigned long end=125000+maxApRunTimeMinutes*60000UL;
+    p.updating=true;p.updateWifiRecovery(end+1);assert(p.recoveryApActive);
+    p.updating=false;p.updateWifiRecovery(end+1);assert(!p.recoveryApActive&&!p.dnsApServer);
+    p.updateWifiRecovery(end+120000);assert(!p.recoveryApActive);
+    p.updateWifiRecovery(end+120001);assert(p.recoveryApActive);
+    p.wifiModeDesired=WIFIMODE_AP;p.transition(end+120001);
+    assert(!p.recoveryApActive&&p.wifiModeRunning==WIFIMODE_AP&&WiFi.modeValue==WIFI_AP);
+    p.wifiModeDesired=WIFIMODE_STATION;p.transition(end+120002);
+    assert(!p.dnsApServer&&p.wifiOfflineSince==end+120002);
+    {Probe healthy;healthy.bssidLocked=false;healthy.fallback=true;WiFi.connected=WL_CONNECTED;
+     healthy.updateWifiRecovery(1000000);assert(!healthy.recoveryApActive);
+     healthy.staticIp=true;healthy.gatewayLastSeen=1000000;cachedGateway=true;
+     healthy.updateWifiRecovery(1500000);assert(!healthy.recoveryApActive&&arpRequests);
+     cachedGateway=false;healthy.updateWifiRecovery(1619999);assert(!healthy.recoveryApActive);
+     healthy.updateWifiRecovery(1625000);assert(healthy.recoveryApActive);
+     // Returning to the LAN does not cut off a user who is editing recovery settings.
+     cachedGateway=true;healthy.updateWifiRecovery(1630000);assert(healthy.recoveryApActive);}
+    WiFi.connected=0;
+    {Probe wrap;wrap.wifiOfflineSince=ULONG_MAX-60000UL;
+     wrap.updateWifiRecovery(wrap.wifiOfflineSince+119999UL);assert(!wrap.recoveryApActive);
+     wrap.updateWifiRecovery(wrap.wifiOfflineSince+120000UL);assert(wrap.recoveryApActive);}
+    {Probe disabled;disabled.bssidLocked=false;disabled.fallback=false;disabled.updateWifiRecovery(3000000);
 #ifdef MINIMAL
-    assert(p.wifiModeDesired==WIFIMODE_FALLBACK);
+     assert(disabled.recoveryApActive);
 #else
-    assert(p.wifiModeDesired==WIFIMODE_STATION);
+     assert(!disabled.recoveryApActive);
 #endif
-    p.wifiModeDesired=WIFIMODE_STATION;p.fallback=true;p.updateWifiRecovery(3000000);assert(p.wifiModeDesired==WIFIMODE_FALLBACK);
-    puts("PASS timed locked-AP recovery, real softAP transition, authenticated mode, bounded retry, OTA deferral and millis wrap");
+    }
+    {Probe local;testMillis=100;local.startLocalRecovery();local.transition(100);
+     assert(local.localRecoveryActive&&local.wifiModeRunning==WIFIMODE_AP);
+     local.updateWifiRecovery(300099);assert(local.localRecoveryActive);
+     local.updateWifiRecovery(300100);assert(!local.localRecoveryActive&&local.wifiModeDesired==WIFIMODE_STATION);}
+    {Probe collision;collision.staticIp=true;WiFi.ip=IPAddress(0U);collision.startRecoveryAp(0);assert(WiFi.apIp==IPAddress(172,31,255,1));}
+    {Probe failed;WiFi.apOk=false;failed.startRecoveryAp(0);assert(!failed.recoveryApActive&&!failed.dnsApServer);WiFi.apOk=true;}
+    puts("PASS fault-only AP+STA, gateway ARP, offline timeout, physical recovery expiry, BSSID retries, OTA deferral and clock wrap");
 }
 '''
         for define, suffix in [('', 'normal'), ('#define MINIMAL\n', 'minimal'), ('#define DEBUG\n', 'debug')]:
