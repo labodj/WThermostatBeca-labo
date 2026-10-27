@@ -1,0 +1,3 @@
+platformio==6.2.0
+# Python dependencies for PlatformIO's latest packaged serial uploader.
+esptool==4.11.0

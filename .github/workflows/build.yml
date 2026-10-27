@@ -1,89 +1,82 @@
 name: Build
-
 on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  homeassistant:
+    runs-on: ubuntu-24.04
     steps:
-    - name: Checkout repository and submodules
-      uses: actions/checkout@v2
-      with:
-        submodules: recursive
-    - name: Cache pip
-      uses: actions/cache@v2
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-    - name: Cache PlatformIO
-      uses: actions/cache@v2
-      with:
-        path: ~/.platformio
-        key: ${{ runner.os }}-${{ hashFiles('**/lockfiles') }}
-    - name: Set up Python
-      uses: actions/setup-python@v2
-    - name: Install PlatformIO
-      run: |
-        python -m pip install --upgrade pip
-        pip install --upgrade platformio
-    - name: Install Libraries
-      run: |
-        pio pkg install -e wthermostat
-    - name: Set env
-      shell: bash
-      run: |
-        echo "ref is: ${GITHUB_REF}"
-        if [[ "${GITHUB_REF}" = refs/tags/v* ]]; then
-          echo "Release mode"
-          echo "RELEASE_VERSION=${GITHUB_REF#refs/*/}" | sed "s#/#_#g" >> $GITHUB_ENV
-        else
-          echo "Non-Release mode"
-          echo "RELEASE_VERSION=${GITHUB_REF#refs/*/}-$(date +'%Y-%m-%d-%H-%M')-$(git rev-parse --short HEAD)" | sed "s#/#_#g" >> $GITHUB_ENV
-        fi
-    - name: write-override
-      run: echo -e "[common]\nappversion = ${{ env.RELEASE_VERSION }}" > platformio_override.ini
-    - name: Run Checks
-      env:
-        BUILDNAME: ${{ env.RELEASE_VERSION }}
-        CI: true
-      run: pio check -e wthermostat
-    - name: Build Firmware
-      env:
-        BUILDNAME: ${{ env.RELEASE_VERSION }}
-        CI: true
-      run: pio run -e wthermostat
-    - name: GZIP Firmware
-      run: gzip -9 "build_output/firmware/wthermostat-${{ env.RELEASE_VERSION }}.bin"
-    - name: Publish Firmware
-      uses: actions/upload-artifact@v3
-      with:
-        name: wthermostat-${{ env.RELEASE_VERSION }}
-        path: |
-          build_output/firmware/*.bin.gz
-    - name: Create Release
-      if: startsWith(github.ref, 'refs/tags/v')
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ github.ref }}
-        release_name: Release ${{ env.RELEASE_VERSION }}
-        body: |
-          Changes in this Release
-          - First Change
-          - Second Change
-        draft: true
-        prerelease: true
-    - name: upload firmware
-      if: startsWith(github.ref, 'refs/tags/v')
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: "build_output/firmware/wthermostat-${{ env.RELEASE_VERSION }}.bin.gz"
-        asset_name: "wthermostat-${{ env.RELEASE_VERSION }}.bin.gz"
-        asset_content_type: application/gzip
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14.10'
+      - run: python -m pip install -r requirements-homeassistant-test.txt
+      - name: Validate discovery with official Home Assistant schemas
+        run: python tests/homeassistant_schema.py
+  build:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14.10'
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio
+          key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini', 'requirements-dev.txt') }}
+      - run: python -m pip install -r requirements-dev.txt
+      - name: Native regression tests
+        run: python -m unittest discover -s tests -v
+      - name: Firmware version
+        id: version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME//[!a-zA-Z0-9._-]/_}"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then version="${version#v}"; fi
+          version="${version:0:40}"
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            version="$version-$(date -u +%Y%m%d)-$(git rev-parse --short HEAD)"
+          fi
+          printf 'RELEASE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf '[common]\nappversion = %s\n' "$version" > platformio_override.ini
+      - name: Build all firmware variants
+        run: pio run -e wthermostat -e wthermostat-minimal -e wthermostat-debug
+      - name: Static analysis
+        run: python pio/check.py
+      - name: Package firmware and hashes
+        run: |
+          gzip -n -9 -k build_output/firmware/*.bin
+          sha256sum build_output/firmware/*.bin* > build_output/SHA256SUMS
+          pio pkg list > build_output/dependencies.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wthermostat-${{ env.RELEASE_VERSION }}
+          path: build_output/
+          if-no-files-found: error
+  release:
+    needs: [build, homeassistant]
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wthermostat-${{ needs.build.outputs.version }}
+          path: build_output
+      - name: Draft tagged release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" build_output/firmware/*.bin.gz build_output/SHA256SUMS --draft --prerelease --verify-tag --generate-notes

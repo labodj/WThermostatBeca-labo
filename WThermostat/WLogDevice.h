@@ -35,8 +35,10 @@ const char* LOG_MODE_VERBOSE PROGMEM = "verbose";
 const char* URI_WSLOG PROGMEM = "/wslog";
 
 const static char HTTP_WEBLOG[]         PROGMEM = R"=====(
-	<textarea readonly id="t1" cols="340" rows="25" wrap="off" name="t1" style="resize:vertical;width:98%;height:318px;padding:5px;overflow:auto;background:#1f1f1f;color:#65c115"></textarea><br>
-	Hints: Change LogLevel <a href="/logging" target="_l">here</a> and reinitialize Thermostat <a href="/thermostat_reinit" target="_l">there</a>. Use LogLevel Verbose to see all MCU communication.
+    <label><input type="checkbox" id="pauseLog"> Pause display (new messages are skipped)</label>
+	<label>Live device log<textarea readonly id="t1" rows="18" name="t1"></textarea></label>
+	<p><a href="/logging">Configure logging</a>. Verbose logging includes all MCU communication.</p>
+    <form action="/thermostat_reinit" method="post"><button type="submit">Reinitialize thermostat</button></form>
 )=====";
 
 
@@ -48,15 +50,16 @@ const static char HTTP_WEBLOG_SCRIPT[]             PROGMEM = R"=====(<script>
 		if (!ws) return;
 		if (ws.readyState !== 1) return;
 		ws.send("heartbeat");
-		pt=setTimeout(ping, 3000);
+
 	}
 	function msg(m){
-		eb('t1').value+=m;
+        if (eb('pauseLog').checked) return;
+        eb('t1').value = (eb('t1').value + m).slice(-65536);
 		eb('t1').scrollTop=99999;
 	}
 	function wsinit(){
 		try {
-			var url = "ws://" + location.host + "/wslog";
+			var url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + "/wslog";
 			msg('Connecting to ' + url + '\n');
 			ws = new WebSocket(url, ["log"]);
 		} catch(e){
@@ -66,13 +69,14 @@ const static char HTTP_WEBLOG_SCRIPT[]             PROGMEM = R"=====(<script>
 		}
 		ws.onopen = function(){
 			msg('Connected\n');
-			if (pt) clearTimeout(pt);
+	        if (pt) clearInterval(pt);
 			pt=setInterval(function(){ping();}, 3000);
 		}
 		ws.onmessage = function(e){
 			msg(e.data+'\n');
 		}
 		ws.onclose = function(e){
+            if (pt) clearInterval(pt);
 			msg('WebSocket Connection Closed! '+e.reason+'\n\n');
 			delete ws;
 			setTimeout(function(){ wsinit(); }, 3000);
@@ -82,7 +86,8 @@ const static char HTTP_WEBLOG_SCRIPT[]             PROGMEM = R"=====(<script>
 			//ws.close();
 		}
 	}
-	wsinit();
+	if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wsinit, {once:true});
+    else wsinit();
 </script>
 )=====";
 
@@ -121,7 +126,7 @@ public:
 
 		this->logLevelWebByte = network->getSettings()->setByte(PROP_LOGLEVELWEBBYTE,
 			(network->getSettingsOld() && network->getSettingsOld()->existsSetting(PROP_LOGLEVELWEBBYTE) ? network->getSettingsOld()->getByte(PROP_LOGLEVELWEBBYTE) : LOG_LEVEL_TRACE));
-		setlogLevelWebByte(LOG_LEVEL_TRACE);
+        setlogLevelWebByte(constrain(getlogLevelWebByte(), LOG_LEVEL_SILENT, LOG_LEVEL_VERBOSE));
 		this->logLevel = new WProperty(PROP_LOGLEVEL, TITL_LOGLEVEL, STRING, 8);
 		this->logLevel->setAtType(PROP_LOGLEVEL);
 		this->logLevel->addEnumString(LOG_MODE_SILENT);
@@ -133,7 +138,7 @@ public:
 		this->logLevel->addEnumString(LOG_MODE_VERBOSE);
 		this->logLevel->setVisibility(MQTT);
 		this->addProperty(logLevel);
-		this->logLevelWeb = new WProperty(PROP_LOGLEVEL, TITL_LOGLEVEL, STRING, 8);
+		this->logLevelWeb = new WProperty(PROP_LOGLEVELWEB, TITL_LOGLEVEL, STRING, 8);
 		this->logLevelWeb->setAtType(PROP_LOGLEVELWEB);
 		this->logLevelWeb->addEnumString(LOG_MODE_SILENT);
 		this->logLevelWeb->addEnumString(LOG_MODE_FATAL);
@@ -170,35 +175,39 @@ public:
     
     }
 
-    virtual void printConfigPage(AsyncWebServerRequest *request, AsyncResponseStream* page) {
+    virtual void printConfigPage(AsyncWebServerRequest *request, AsyncResponseStream* page) override {
     	network->log()->notice(F("Log config page"));
     	page->printf_P(HTTP_CONFIG_PAGE_BEGIN, getId());
     	//ComboBox with model selection
 
-		page->printf_P(HTTP_COMBOBOX_BEGIN, F("MQTT Log Mode:"), "lm");
-		page->printf_P(HTTP_COMBOBOX_ITEM, "0", (getlogLevelByte() == LOG_LEVEL_SILENT  ? HTTP_SELECTED : ""), F("Logging Disabled"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "1", (getlogLevelByte() == LOG_LEVEL_FATAL   ? HTTP_SELECTED : ""), F("Fatal Messages"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "2", (getlogLevelByte() == LOG_LEVEL_ERROR   ? HTTP_SELECTED : ""), F("Error Messages"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "3", (getlogLevelByte() == LOG_LEVEL_WARNING ? HTTP_SELECTED : ""), F("Warning Messages"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "4", (getlogLevelByte() == LOG_LEVEL_NOTICE  ? HTTP_SELECTED : ""), F("Notice Messages"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "5", (getlogLevelByte() == LOG_LEVEL_TRACE   ? HTTP_SELECTED : ""), F("Trace Messages"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "6", (getlogLevelByte() == LOG_LEVEL_VERBOSE ? HTTP_SELECTED : ""), F("Verbose Messages"));
+		page->printf_P(HTTP_COMBOBOX_BEGIN, PSTR("MQTT Log Mode:"), "lm");
+		page->printf_P(HTTP_COMBOBOX_ITEM, "0", (getlogLevelByte() == LOG_LEVEL_SILENT  ? HTTP_SELECTED : ""), PSTR("Logging Disabled"));
+		page->printf_P(HTTP_COMBOBOX_ITEM, "1", (getlogLevelByte() == LOG_LEVEL_FATAL   ? HTTP_SELECTED : ""), PSTR("Fatal Messages"));
+		page->printf_P(HTTP_COMBOBOX_ITEM, "2", (getlogLevelByte() == LOG_LEVEL_ERROR   ? HTTP_SELECTED : ""), PSTR("Error Messages"));
+		page->printf_P(HTTP_COMBOBOX_ITEM, "3", (getlogLevelByte() == LOG_LEVEL_WARNING ? HTTP_SELECTED : ""), PSTR("Warning Messages"));
+		page->printf_P(HTTP_COMBOBOX_ITEM, "4", (getlogLevelByte() == LOG_LEVEL_NOTICE  ? HTTP_SELECTED : ""), PSTR("Notice Messages"));
+		page->printf_P(HTTP_COMBOBOX_ITEM, "5", (getlogLevelByte() == LOG_LEVEL_TRACE   ? HTTP_SELECTED : ""), PSTR("Trace Messages"));
+		page->printf_P(HTTP_COMBOBOX_ITEM, "6", (getlogLevelByte() == LOG_LEVEL_VERBOSE ? HTTP_SELECTED : ""), PSTR("Verbose Messages"));
 		page->printf_P(HTTP_COMBOBOX_END);
 
-		page->printf_P(HTTP_COMBOBOX_BEGIN, F("Web Log Mode:"), "lw");
-		page->printf_P(HTTP_COMBOBOX_ITEM, "0", (getlogLevelWebByte() == LOG_LEVEL_SILENT  ? HTTP_SELECTED : ""), F("Logging Disabled"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "1", (getlogLevelWebByte() == LOG_LEVEL_FATAL   ? HTTP_SELECTED : ""), F("Fatal Messages"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "2", (getlogLevelWebByte() == LOG_LEVEL_ERROR   ? HTTP_SELECTED : ""), F("Error Messages"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "3", (getlogLevelWebByte() == LOG_LEVEL_WARNING ? HTTP_SELECTED : ""), F("Warning Messages"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "4", (getlogLevelWebByte() == LOG_LEVEL_NOTICE  ? HTTP_SELECTED : ""), F("Notice Messages"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "5", (getlogLevelWebByte() == LOG_LEVEL_TRACE   ? HTTP_SELECTED : ""), F("Trace Messages"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "6", (getlogLevelWebByte() == LOG_LEVEL_VERBOSE ? HTTP_SELECTED : ""), F("Verbose Messages"));
+		page->printf_P(HTTP_COMBOBOX_BEGIN, PSTR("Web Log Mode:"), "lw");
+		page->printf_P(HTTP_COMBOBOX_ITEM, "0", (getlogLevelWebByte() == LOG_LEVEL_SILENT  ? HTTP_SELECTED : ""), PSTR("Logging Disabled"));
+		page->printf_P(HTTP_COMBOBOX_ITEM, "1", (getlogLevelWebByte() == LOG_LEVEL_FATAL   ? HTTP_SELECTED : ""), PSTR("Fatal Messages"));
+		page->printf_P(HTTP_COMBOBOX_ITEM, "2", (getlogLevelWebByte() == LOG_LEVEL_ERROR   ? HTTP_SELECTED : ""), PSTR("Error Messages"));
+		page->printf_P(HTTP_COMBOBOX_ITEM, "3", (getlogLevelWebByte() == LOG_LEVEL_WARNING ? HTTP_SELECTED : ""), PSTR("Warning Messages"));
+		page->printf_P(HTTP_COMBOBOX_ITEM, "4", (getlogLevelWebByte() == LOG_LEVEL_NOTICE  ? HTTP_SELECTED : ""), PSTR("Notice Messages"));
+		page->printf_P(HTTP_COMBOBOX_ITEM, "5", (getlogLevelWebByte() == LOG_LEVEL_TRACE   ? HTTP_SELECTED : ""), PSTR("Trace Messages"));
+		page->printf_P(HTTP_COMBOBOX_ITEM, "6", (getlogLevelWebByte() == LOG_LEVEL_VERBOSE ? HTTP_SELECTED : ""), PSTR("Verbose Messages"));
 		page->printf_P(HTTP_COMBOBOX_END);
 
     	page->printf_P(HTTP_CONFIG_SAVE_BUTTON);
 		page->printf_P(HTTP_HOME_BUTTON);
     }
-    void saveConfigPage(AsyncWebServerRequest *request) {
+    void saveConfigPage(AsyncWebServerRequest *request) override {
+        const String mqtt = getValueOrEmpty(request, "lm"), web = getValueOrEmpty(request, "lw");
+        if (mqtt.length() != 1 || mqtt[0] < '0' || mqtt[0] > '6' || web.length() != 1 || web[0] < '0' || web[0] > '6') {
+            request->send(400, "text/plain", "Invalid log level"); return;
+        }
 		network->log()->notice(F("Log Beca config save lm=%s/%d"), getValueOrEmpty(request, "lm").c_str(), getValueOrEmpty(request, "lm").toInt());
 		setlogLevelByte(constrain(getValueOrEmpty(request, "lm").toInt(),LOG_LEVEL_SILENT, LOG_LEVEL_VERBOSE ));
 		this->setlogLevelMqtt(getlogLevelByte());
@@ -207,13 +216,11 @@ public:
 		this->setlogLevelWeb(getlogLevelWebByte());
     }
 
-    void loop(unsigned long now) {
+    void loop(unsigned long now) override {
 		wslog.cleanupClients();
     }
 
-    void handleUnknownMqttCallback(String stat_topic, String partialTopic, String payload, unsigned int length) {
-		//logCommand(((String)"handleUnknownMqttCallback " + stat_topic + " / " + partialTopic + " / " + payload).c_str());
-    }
+    void handleUnknownMqttCallback(const String&, const String&, const String&, unsigned int) override {}
 
 	byte getlogLevelByte() {
 		if (!logLevelByte) return LOG_LEVEL_SILENT;
@@ -235,7 +242,7 @@ public:
 	}
 
 	void setMinLogLevel(){
-		unsigned int toSet=LOG_LEVEL_SILENT;
+		int toSet=LOG_LEVEL_SILENT;
 		if (getlogLevelByte() > toSet) toSet=getlogLevelByte();
 		if (getlogLevelWebByte() > toSet) toSet=getlogLevelWebByte();
 		network->log()->setLevelNetwork(toSet);
@@ -243,8 +250,7 @@ public:
 	}
 
     void onlogLevelMqttChange(WProperty* property) {
-		if (property->equalsString(LOG_MODE_SILENT)) setlogLevelByte(LOG_LEVEL_SILENT);
-		else if (property->equalsString(LOG_MODE_FATAL)) setlogLevelByte(LOG_LEVEL_FATAL);
+		if (property->equalsString(LOG_MODE_FATAL)) setlogLevelByte(LOG_LEVEL_FATAL);
 		else if (property->equalsString(LOG_MODE_ERROR)) setlogLevelByte(LOG_LEVEL_ERROR);
 		else if (property->equalsString(LOG_MODE_WARNING)) setlogLevelByte(LOG_LEVEL_WARNING);
 		else if (property->equalsString(LOG_MODE_NOTICE)) setlogLevelByte(LOG_LEVEL_NOTICE);
@@ -254,8 +260,7 @@ public:
     }
 
 	void onlogLevelWebChange(WProperty* property) {
-		if (property->equalsString(LOG_MODE_SILENT)) setlogLevelWebByte(LOG_LEVEL_SILENT);
-		else if (property->equalsString(LOG_MODE_FATAL)) setlogLevelWebByte(LOG_LEVEL_FATAL);
+		if (property->equalsString(LOG_MODE_FATAL)) setlogLevelWebByte(LOG_LEVEL_FATAL);
 		else if (property->equalsString(LOG_MODE_ERROR)) setlogLevelWebByte(LOG_LEVEL_ERROR);
 		else if (property->equalsString(LOG_MODE_WARNING)) setlogLevelWebByte(LOG_LEVEL_WARNING);
 		else if (property->equalsString(LOG_MODE_NOTICE)) setlogLevelWebByte(LOG_LEVEL_NOTICE);
@@ -277,8 +282,7 @@ public:
 	}
 
 	const char * logLevelByteToString(byte lm) {
-		if (lm == LOG_LEVEL_SILENT) return LOG_MODE_SILENT;
-		else if (lm == LOG_LEVEL_FATAL) return LOG_MODE_FATAL;
+		if (lm == LOG_LEVEL_FATAL) return LOG_MODE_FATAL;
 		else if (lm == LOG_LEVEL_ERROR) return LOG_MODE_ERROR;
 		else if (lm == LOG_LEVEL_WARNING) return LOG_MODE_WARNING;
 		else if (lm == LOG_LEVEL_NOTICE) return LOG_MODE_NOTICE;
@@ -287,7 +291,7 @@ public:
 		else return LOG_MODE_SILENT;
     }
 
-	void sendLog(int level, const char* message) {
+	void sendLog(int level, const char* message) override {
 
 		if (level<=getlogLevelWebByte()){
 			wslog.printfAll(PSTR("%s: %s"), logLevelByteToString(level), message);
@@ -303,37 +307,25 @@ public:
 
 	
 
-	void wsOnEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventType type, void * arg, uint8_t *data, size_t len){
-		if (!client) return;
-		if (client->status()!=WS_CONNECTED) return;
-		if (!client->canSend()) return;
-		if (type == WS_EVT_CONNECT){
-			client->printf(PSTR("Hello WebSocket Client #%u\n"), client->id());
-			client->printf(PSTR("Now you see all logs for logSeverity %s (or more important)\n"), logLevelWeb->c_str());
-			client->ping();
-		} else if (type == WS_EVT_DATA){
-			AwsFrameInfo * info = (AwsFrameInfo*)arg;
-			if (info->final && info->index == 0 && info->len == len){
-				if (info->opcode == WS_TEXT){
-					//client->text("I got your text message\n");
-					data[len] = 0;
-					//os_printf("%s\n", (char*)data);
-				} else {
-					//client->binary("I got your binary message\n");
-				}
-			}
-			client->ping();
-		} else if (type == WS_EVT_PONG){
-		}
-	}
+    void wsOnEvent(AsyncWebSocket*, AsyncWebSocketClient* client, AwsEventType type, void*, uint8_t*, size_t) {
+        if (!client || client->status() != WS_CONNECTED || !client->canSend()) return;
+        if (type == WS_EVT_CONNECT) {
+            client->printf(PSTR("Hello WebSocket Client #%u\n"), client->id());
+            client->printf(PSTR("Now you see all logs for logSeverity %s (or more important)\n"), logLevelWeb->c_str());
+            client->ping();
+        } else if (type == WS_EVT_DATA) client->ping();
+    }
 
-void webserverInitHook(AsyncWebServer *webServer) {
+void webserverInitHook(AsyncWebServer *webServer) override {
+    wslog.addMiddleware([this](AsyncWebServerRequest* request, const ArMiddlewareNext& next) {
+        if (network->authorize(request)) next();
+    });
 	wslog.onEvent([this](AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventType type, void * arg, uint8_t *data, size_t len){
 		this->wsOnEvent(server, client, type, arg, data, len);
 	});
 	webServer->addHandler(&wslog);
 }
-void webserverDeinitHook(AsyncWebServer *webServer) {
+void webserverDeinitHook(AsyncWebServer *webServer) override {
 	wslog.closeAll();
 }
 

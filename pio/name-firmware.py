@@ -5,6 +5,7 @@ try:
 except ImportError:
     import ConfigParser as configparser
 
+# PlatformIO/SCons injects Import and the requested construction environments.
 Import("env", "projenv")
 
 # Dump construction environments (for debug purpose)
@@ -19,11 +20,9 @@ appversion = config.get("common", "appversion")
 if os.path.exists('platformio_override.ini'):
     config = configparser.ConfigParser()
     config.read("platformio_override.ini")
-    try:
-        appversion2 = config.get("common", "appversion")
-        if appversion2: appversion=appversion2
-    except:
-        pass
+    appversion2 = config.get("common", "appversion", fallback=None)
+    if appversion2:
+        appversion = appversion2
 
 print("name-firmware to {}".format(appversion))
 
@@ -31,7 +30,7 @@ OUTPUT_DIR = "build_output{}".format(os.path.sep)
 #print("name-firmware.py // appversion: {}".format(appversion))
 
 def bin_map_copy(source, target, env):
-    variant = str(target[0]).split(os.path.sep)[1]
+    variant = env.subst("$PIOENV")
     #print("bin_map_copy: {} {} {}".format(source[0], target[0], variant))
     
     # check if output directories exist and create if necessary
@@ -59,6 +58,10 @@ def bin_map_copy(source, target, env):
     print("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
     print("FIRMWARE BUILT: {}".format(bin_file))
     print("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+
+    elf_file = os.path.join(os.path.dirname(str(target[0])), "firmware.elf")
+    if os.path.isfile(elf_file):
+        shutil.copy(elf_file, os.path.join(OUTPUT_DIR, 'map', '{}-{}.elf'.format(variant, appversion)))
 
     # copy firmware.map to map/<variant>.map
     if os.path.isfile("firmware.map"):

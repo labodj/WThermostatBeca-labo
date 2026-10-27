@@ -45,6 +45,8 @@ WClock *wClock;
 #endif
 
 void setup() {
+    // NTP can wait for one second; retain a full UART burst until the loop resumes.
+    Serial.setRxBufferSize(1024);
     Serial.begin(SERIALSPEED);
 
     // Wifi and Mqtt connection
@@ -91,6 +93,7 @@ void setup() {
     // Communication between ESP and Beca-Mcu
     network->log()->trace(F("Loading BecaDevice (%d)"), ESP.getMaxFreeBlockSize());
     becaDevice = new WBecaDevice(network, wClock);
+    network->setOnNetworkWait([]() { becaDevice->serviceSerial(millis()); });
     becaDevice->setMqttSendChangedValues(true);
     network->addDevice(becaDevice);
 

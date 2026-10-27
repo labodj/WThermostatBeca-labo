@@ -1,0 +1,4 @@
+# Isolated integration tests only; not a firmware or native-test dependency.
+homeassistant==2026.10.4
+# Required by Home Assistant's MQTT integration manifest.
+paho-mqtt==2.1.0

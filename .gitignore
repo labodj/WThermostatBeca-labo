@@ -13,3 +13,5 @@ thermostat.code-workspace
 debug.log
 platformio_override.ini
 *.bin
+__pycache__/
+.venv/

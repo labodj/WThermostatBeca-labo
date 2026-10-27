@@ -6,10 +6,10 @@
 *        Tasmota by Theo Arends (https://github.com/arendst/Tasmota)
 \*********************************************************************************************/
 
-#ifndef __WCLOCK_H__
-#define __WCLOCK_H__
+#ifndef W_CLOCK_H
+#define W_CLOCK_H
 
-#include <ESP8266HTTPClient.h>
+#include <utility>
 #include <ESP8266WiFi.h>
 #include <NTPClient.h>
 #include <TimeLib.h>
@@ -31,34 +31,34 @@ const static char* DEFAULT_TIME_DST PROGMEM = "0,3,0,2,120";
 const static char* DEFAULT_TIME_STD PROGMEM = "0,10,0,3,60";
 
 const static char HTTP_TEXT_CLOCK_HOWTO[] PROGMEM = R"=====(
-<div style="max-width: 400px">
+<div>
 See <a href="https://github.com/fashberg/WThermostatBeca/blob/master/Configuration.md#4-configure-clock-settings"
-target="_blank">github.com/fashberg/WThermostatBeca/blob/master/Configuration.md</a> 
+target="_blank" rel="noopener">clock configuration documentation (opens a new tab)</a>
 for Howto set Timezone and Daylight-Savings
 </div>
 )=====";
 
 typedef struct {
-    bool initialized;
-    uint16_t week;   // bits 1 - 3   = 0=Last week of the month, 1=First, 2=Second, 3=Third, 4=Fourth
-    uint16_t month;  // bits 4 - 7   = 1=Jan, 2=Feb, ... 12=Dec
-    uint16_t dow;    // bits 8 - 10  = day of week, 1=Sun, 2=Mon, ... 7=Sat
-    uint16_t hour;   // bits 11 - 15 = 0-23
-    int16_t offset;
+    bool initialized = false;
+    uint16_t week = 0;   // bits 1 - 3   = 0=Last week of the month, 1=First, 2=Second, 3=Third, 4=Fourth
+    uint16_t month = 0;  // bits 4 - 7   = 1=Jan, 2=Feb, ... 12=Dec
+    uint16_t dow = 0;    // bits 8 - 10  = day of week, 1=Sun, 2=Mon, ... 7=Sat
+    uint16_t hour = 0;   // bits 11 - 15 = 0-23
+    int16_t offset = 0;
 } TimeRule;
 
 typedef struct {
-    uint8_t second;
-    uint8_t minute;
-    uint8_t hour;
-    uint8_t day_of_week;  // sunday is day 1
-    uint8_t day_of_month;
-    uint8_t month;
-    char name_of_month[4];
-    uint16_t day_of_year;
-    uint16_t year;
-    unsigned long days;
-    unsigned long valid;
+    uint8_t second = 0;
+    uint8_t minute = 0;
+    uint8_t hour = 0;
+    uint8_t day_of_week = 0;  // sunday is day 1
+    uint8_t day_of_month = 0;
+    uint8_t month = 0;
+    char name_of_month[4]{};
+    uint16_t day_of_year = 0;
+    uint16_t year = 0;
+    unsigned long days = 0;
+    unsigned long valid = 0;
 } TIME_T;
 
 typedef struct {
@@ -105,7 +105,7 @@ class WClock : public WDevice {
     typedef std::function<void(const char*)> TErrorHandlerFunction;
 
     //WClock(bool debug, WNetwork *network) {
-    WClock(WNetwork* network, String applicationName)
+    WClock(WNetwork* network, const String& applicationName)
         : WDevice(network, ID_CLOCK, NAME_CLOCK, network->getIdx(), DEVICE_TYPE_TEXT_DISPLAY) {
         this->mainDevice = false;
         this->visibility = MQTT;
@@ -149,8 +149,8 @@ class WClock : public WDevice {
 
         parseTimeZone(this->timeZoneConfig->c_str(), &this->timezone_hours, &this->timezone_minutes);
         if (this->timezone_hours == 99) {
-            parseTimeRule(this->timeDST->c_str(), &this->timeRuleDst);
-            parseTimeRule(this->timeSTD->c_str(), &this->timeRuleStd);
+            if (!parseTimeRule(this->timeDST->c_str(), &this->timeRuleDst)) parseTimeRule(DEFAULT_TIME_DST, &this->timeRuleDst);
+            if (!parseTimeRule(this->timeSTD->c_str(), &this->timeRuleStd)) parseTimeRule(DEFAULT_TIME_STD, &this->timeRuleStd);
         } else {
             resetTimeRule(&this->timeRuleStd);
             resetTimeRule(&this->timeRuleDst);
@@ -166,10 +166,11 @@ class WClock : public WDevice {
         Rtc.utc_time = 0;
         BreakTime(Rtc.utc_time, RtcTime);
 
-        this->epochTime = new WLongProperty(PROP_EPOCHTIME);
+        this->epochTime = new WProperty(PROP_EPOCHTIME, PROP_EPOCHTIME, UNSIGNED_LONG);
+        this->epochTime->setAtType(ATTYPE_LONG);
         this->epochTime->setReadOnly(true);
         this->epochTime->setOnValueRequest([this](WProperty* p) {
-            p->setLong(getEpochTime());
+            p->setUnsignedLong(getEpochTime());
         });
         this->addProperty(epochTime);
         this->epochTimeLocalFormatted = new WStringProperty(PROP_EPOCHTIMELOCALFORMATTED, nullptr, 20);
@@ -188,41 +189,42 @@ class WClock : public WDevice {
         this->uptime = new WLongProperty(PROP_UPTIME);
         this->uptime->setReadOnly(true);
         this->uptime->setOnValueRequest([this](WProperty* p) {
-            p->setLong(getUptime());
+            p->setLong(static_cast<long>(getUptime()));
         });
         this->addProperty(uptime);
-        lastTry = lastNtpSync = ntpTime =  lastRun, lastDiff = 0;
+        lastTry = lastNtpSync = ntpTime = lastRun = 0;
+        lastDiff = 0;
 
         ntpClient = NTPClient(ntpUDP, ntpServer->c_str());
     }
 
-    void loop(unsigned long now) {
+    void loop(unsigned long now) override {
         TIME_T tmpTime;
         const int ntpRetryMinutes = 1;
         const int ntpResyncMinutes = 5;
         const int ntpInvalidateHours = 48;
         bool notify=false;
         //Invalid after 48 hours failed sync
-        if (isValidTime() && !(now - lastNtpSync < (ntpInvalidateHours * 60 * 60 * 1000) )){
+        if (isValidTime() && !(now - lastNtpSync < (ntpInvalidateHours * 60UL * 60 * 1000) )){
             network->log()->error(F("No valid NTP Time since %d hours -> invalidating"), ntpInvalidateHours);
         }
-        validTime->setBoolean((lastNtpSync > 0) && (now - lastNtpSync < (ntpInvalidateHours * 60 * 60 * 1000)));
+        validTime->setBoolean((lastNtpSync > 0) && (now - lastNtpSync < (ntpInvalidateHours * 60UL * 60 * 1000)));
 
         Rtc.utc_time=getEpochTime();
         // calc retry - faster 3 minutes after boot
-        unsigned long nextSync=(lastTry > lastNtpSync  
-            ? lastTry+(ntpRetryMinutes * ( now < 3 * 60 * 1000 ? 20 : 60) * 1000)
-            : lastNtpSync + (ntpResyncMinutes * 60 * 1000));
+        const unsigned long syncInterval = lastTry != lastNtpSync
+            ? ntpRetryMinutes * (now < 3UL * 60 * 1000 ? 20UL : 60UL) * 1000
+            : ntpResyncMinutes * 60UL * 1000;
         if ((
                 (!isValidTime() && lastTry == 0) 
-                || (now > nextSync) 
+                || (now - lastTry >= syncInterval)
             ) && (WiFi.status() == WL_CONNECTED)) {
             network->log()->trace(F("Time via NTP server '%s'"), ntpServer->c_str());
             network->logHeap(PSTR("NTP Start"));
             lastTry = now;
+            const uint32_t oldutc = getEpochTime();
             if (ntpClient.update()) {
                 network->logHeap(PSTR("NTP GotTime"));
-                uint32_t oldutc = getEpochTime();
                 ntpTime = ntpClient.getEpochTime();
                 #ifdef NTPTESTSTART
                 ntpTime = NTPTESTSTART + (millis()/1000);
@@ -230,16 +232,16 @@ class WClock : public WDevice {
                 if (ntpTime > START_VALID_TIME) {
                     if (validTime->getBoolean()){
                         // don't save first diff
-                        lastDiff=ntpTime - oldutc;
+                        lastDiff=static_cast<int64_t>(ntpTime) - oldutc;
                     }
                     Rtc.utc_time = ntpTime;
                     BreakTime(ntpTime, tmpTime);
                     RtcTime.year = tmpTime.year;
                     Rtc.daylight_saving_time = RuleToTime(this->timeRuleDst, RtcTime.year);
                     Rtc.standard_time = RuleToTime(this->timeRuleStd, RtcTime.year);
-                    network->log()->notice(F("NTP time synced: (%04d-%02d-%02d %02d:%02d:%02d, Weekday: %d, Epoch: %d, Dst: %d, Std: %d, OldUTC: %d, ntpTime: %d, Diff: %d, Uptime: %d)"),
+                    network->log()->notice(F("NTP time synced: (%04d-%02d-%02d %02d:%02d:%02d, Weekday: %d, Epoch: %d, Dst: %d, Std: %d, OldUTC: %d, ntpTime: %d, Diff: %lld, Uptime: %d)"),
                             tmpTime.year, tmpTime.month, tmpTime.day_of_month, tmpTime.hour, tmpTime.minute, tmpTime.second, tmpTime.day_of_week,
-                            ntpTime, Rtc.daylight_saving_time, Rtc.standard_time, oldutc, ntpTime, lastDiff, getUptime() );
+                            ntpTime, Rtc.daylight_saving_time, Rtc.standard_time, oldutc, ntpTime, static_cast<long long>(lastDiff), getUptime() );
 
                     validTime->setBoolean(true);
                     notify=true;
@@ -254,7 +256,7 @@ class WClock : public WDevice {
         }
 
         // -------------
-        if (!notify && lastRun > now-1000) return;
+        if (!notify && now - lastRun < 1000) return;
         lastRun=now;
 
         //network->log()->verbose(F("Clock: epoch: %d,timezone_diff: %d, millis: %d, nextSync: %d, lastTry: %d, lastSync: %d"),
@@ -266,13 +268,13 @@ class WClock : public WDevice {
         if (notify || (RtcTime.minute==0 && RtcTime.second==0)){
             if (Rtc.local_time > START_VALID_TIME) {  // 2016-01-01
                 network->log()->trace(F("Clock Recalc Timezone %d"),  Rtc.local_time);
-                int32_t newTz=Rtc.time_timezone;
+                int32_t newTz;
                 if (this->timezone_hours!= 99) {
-                    newTz = (this->timezone_hours * SECS_PER_HOUR) + (this->timezone_minutes * SECS_PER_MIN * (this->timezone_hours < 0 ? -1 : 1));
+                    newTz = (this->timezone_hours * 3600L) + (this->timezone_minutes * 60L * (this->timezone_hours < 0 ? -1 : 1));
 
                 } else {
-                    int32_t dstoffset = this->timeRuleDst.offset * SECS_PER_MIN;
-                    int32_t stdoffset = this->timeRuleStd.offset * SECS_PER_MIN;
+                    int32_t dstoffset = this->timeRuleDst.offset * 60L;
+                    int32_t stdoffset = this->timeRuleStd.offset * 60L;
                     
                     if (Rtc.standard_time < Rtc.daylight_saving_time) { 
                         // Southern hemisphere
@@ -326,11 +328,11 @@ class WClock : public WDevice {
     }
 
     void setOnTimeUpdate(THandlerFunction onTimeUpdate) {
-        this->onTimeUpdate = onTimeUpdate;
+        this->onTimeUpdate = std::move(onTimeUpdate);
     }
 
     void setOnError(TErrorHandlerFunction onError) {
-        this->onError = onError;
+        this->onError = std::move(onError);
     }
 
     unsigned long getEpochTime() {
@@ -441,45 +443,12 @@ class WClock : public WDevice {
     }
 
     void updateFormattedTimeImpl(unsigned long rawTime) {
-        WStringStream* stream = new WStringStream(19);
-        char buffer[5];
-        //year
-        int _year = year(rawTime);
-        itoa(_year, buffer, 10);
-        stream->print(buffer);
-        stream->print("-");
-        //month
-        uint8_t _month = month(rawTime);
-        if (_month < 10) stream->print("0");
-        itoa(_month, buffer, 10);
-        stream->print(buffer);
-        stream->print("-");
-        //month
-        uint8_t _day = day(rawTime);
-        if (_day < 10) stream->print("0");
-        itoa(_day, buffer, 10);
-        stream->print(buffer);
-        stream->print(" ");
-        //hours
-        unsigned long _hours = (rawTime % 86400L) / 3600;
-        if (_hours < 10) stream->print("0");
-        itoa(_hours, buffer, 10);
-        stream->print(buffer);
-        stream->print(":");
-        //minutes
-        unsigned long _minutes = (rawTime % 3600) / 60;
-        if (_minutes < 10) stream->print("0");
-        itoa(_minutes, buffer, 10);
-        stream->print(buffer);
-        stream->print(":");
-        //seconds
-        unsigned long _seconds = rawTime % 60;
-        if (_seconds < 10) stream->print("0");
-        itoa(_seconds, buffer, 10);
-        stream->print(buffer);
-
-        epochTimeLocalFormatted->setString(stream->c_str());
-        delete stream;
+        TIME_T time;
+        BreakTime(rawTime, time);
+        char buffer[32];
+        snprintf(buffer, sizeof(buffer), "%04u-%02u-%02u %02u:%02u:%02u",
+            time.year, time.month, time.day_of_month, time.hour, time.minute, time.second);
+        epochTimeLocalFormatted->setString(buffer);
     }
 
     bool isValidTime() {
@@ -494,19 +463,29 @@ class WClock : public WDevice {
         return offset->getInteger();
     }
 
-    void printConfigPage(AsyncWebServerRequest *request, AsyncResponseStream* page) {
+    void printConfigPage(AsyncWebServerRequest *request, AsyncResponseStream* page) override {
         network->log()->notice(F("Clock config page"));
         page->printf_P(HTTP_CONFIG_PAGE_BEGIN, getId());
-        page->printf_P(HTTP_TEXT_FIELD, "NTP server:", "ntp", 32, ntpServer->c_str());
-        page->printf_P(HTTP_TEXT_FIELD, "Timezone:", "tzone", 6, timeZoneConfig->c_str());
-        page->printf_P(HTTP_TEXT_FIELD, "TimeRule switch to Daylight Saving Time:", "tdst", 14, timeDST->c_str());
-        page->printf_P(HTTP_TEXT_FIELD, "TimeRule switch Back to Standard Time:", "tstd", 14, timeSTD->c_str());
+        page->printf_P(HTTP_TEXT_FIELD, "NTP server:", "ntp", 32, htmlEscapedString(ntpServer->c_str()).c_str());
+        page->printf_P(HTTP_TEXT_FIELD, "Timezone:", "tzone", 6, htmlEscapedString(timeZoneConfig->c_str()).c_str());
+        page->printf_P(HTTP_TEXT_FIELD, "TimeRule switch to Daylight Saving Time:", "tdst", 14, htmlEscapedString(timeDST->c_str()).c_str());
+        page->printf_P(HTTP_TEXT_FIELD, "TimeRule switch Back to Standard Time:", "tstd", 14, htmlEscapedString(timeSTD->c_str()).c_str());
         page->printf_P(HTTP_TEXT_CLOCK_HOWTO);
         page->printf_P(HTTP_CONFIG_SAVEANDREBOOT_BUTTON);
         page->printf_P(HTTP_HOME_BUTTON);
     }
 
-    void saveConfigPage(AsyncWebServerRequest *request) {
+    void saveConfigPage(AsyncWebServerRequest *request) override {
+        const String server = getValueOrEmpty(request, "ntp"), zone = getValueOrEmpty(request, "tzone");
+        const String dst = getValueOrEmpty(request, "tdst"), standard = getValueOrEmpty(request, "tstd");
+        int16_t hours, minutes;
+        TimeRule rule;
+        bool valid = server.length() > 0 && server.length() <= 32 && zone.length() <= 6 && dst.length() <= 14 && standard.length() <= 14;
+        for (size_t i = 0; i < server.length(); ++i)
+            valid &= isalnum(static_cast<unsigned char>(server[i])) || server[i] == '-' || server[i] == '.';
+        valid &= parseTimeZone(zone.c_str(), &hours, &minutes);
+        if (hours == 99) valid &= parseTimeRule(dst.c_str(), &rule) && parseTimeRule(standard.c_str(), &rule);
+        if (!valid) { request->send(400, "text/plain", "Invalid clock configuration"); return; }
         network->log()->notice(F("Save clock config page"));
         this->ntpServer->setString(getValueOrEmpty(request, "ntp").c_str());
         this->timeZoneConfig->setString(getValueOrEmpty(request, "tzone").c_str());
@@ -520,7 +499,7 @@ class WClock : public WDevice {
     THandlerFunction onTimeUpdate;
     TErrorHandlerFunction onError;
     unsigned long lastTry, lastNtpSync, ntpTime, lastRun;
-    long lastDiff;
+    int64_t lastDiff;
     WProperty* epochTime;
     WProperty* epochTimeLocalFormatted;
     WProperty* validTime;
@@ -548,23 +527,10 @@ class WClock : public WDevice {
     }
 
     void notifyOnError(const char* error) {
-        network->log()->notice(error);
+        network->log()->notice(F("%s"), error);
         if (onError) {
             onError(error);
         }
-    }
-
-    char* Trim(char* p) {
-        while ((*p != '\0') && isblank(*p)) {
-            p++;
-        }  // Trim leading spaces
-        char* q = p + strlen(p) - 1;
-        while ((q >= p) && isblank(*q)) {
-            q--;
-        }  // Trim trailing spaces
-        q++;
-        *q = '\0';
-        return p;
     }
 
     void resetTimeRule(TimeRule* tr) {
@@ -576,43 +542,24 @@ class WClock : public WDevice {
         tr->initialized = false;
     }
 
-    void parseTimeRule(const char* ts, TimeRule* tr) {
-        resetTimeRule(tr);
-        // TimeStd 0/1/2/3/4, 1..12, 1..7, 0..23, +/-780
-        if (strlen(ts)) {
-            uint32_t tpos = 0;  // Parameter index
-            int value = 0;
-            char* p = const_cast<char*>(ts);  // Parameters like "1, 2,3 , 4 ,5, -120" or ",,,,,+240"
-            char* q = p;          // Value entered flag
-            while (p && (tpos < 7)) {
-                if (p > q) {  // Any value entered
-                    if (1 == tpos) {
-                        tr->week = (value < 0) ? 0 : (value > 4) ? 4 : value;
-                    }
-                    if (2 == tpos) {
-                        tr->month = (value < 1) ? 1 : (value > 12) ? 12 : value;
-                    }
-                    if (3 == tpos) {
-                        tr->dow = (value < 1) ? 1 : (value > 7) ? 7 : value;
-                    }
-                    if (4 == tpos) {
-                        tr->hour = (value < 0) ? 0 : (value > 23) ? 23 : value;
-                    }
-                    if (5 == tpos) {
-                        tr->offset = (value < -900) ? -900 : (value > 900) ? 900 : value;
-                    }
-                }
-                p = Trim(p);  // Skip spaces
-                if (tpos && (*p == ',')) {
-                    p++;
-                }             // Skip separator
-                p = Trim(p);  // Skip spaces
-                q = p;        // Reset any value entered flag
-                value = strtol(p, &p, 10);
-                tpos++;  // Next parameter
-            }
-            tr->initialized = true;
+    bool parseTimeRule(const char* text, TimeRule* rule) {
+        resetTimeRule(rule);
+        if (!text || !*text) return false;
+        long values[5];
+        const char* cursor = text;
+        for (unsigned i = 0; i < 5; ++i) {
+            char* end;
+            values[i] = strtol(cursor, &end, 10);
+            if (end == cursor) return false;
+            cursor = end;
+            while (*cursor == ' ') ++cursor;
+            if (i < 4) { if (*cursor != ',') return false; ++cursor; }
         }
+        if (*cursor || values[0] < 0 || values[0] > 4 || values[1] < 1 || values[1] > 12 ||
+            values[2] < 0 || values[2] > 7 || values[3] < 0 || values[3] > 23 || values[4] < -900 || values[4] > 900) return false;
+        rule->week = values[0]; rule->month = values[1]; rule->dow = values[2] == 0 ? 1 : values[2];
+        rule->hour = values[3]; rule->offset = static_cast<int16_t>(values[4]); rule->initialized = true;
+        return true;
     }
 
     String getTimeRuleToString(TimeRule tr) {
@@ -623,50 +570,35 @@ class WClock : public WDevice {
         return (String)buf;
     }
 
-    String getTimeZoneIntegerToString(int16_t tz_h, int16_t tz_m) {
-        /*
-        int8_t tz_h = tz / 60;
-        int8_t tz_m = abs(tz % 60);
-        */
-        char buf[7];  //+13:30\0
-        size_t size = sizeof buf;
-        if (tz_h==99){
-            snprintf_P(buf, size, PSTR("DSTSTD"));
-        } else {
-            snprintf_P(buf, size, PSTR("%+03d:%02d"), tz_h, tz_m);
-        }
-        return (String)buf;
+    String getTimeZoneIntegerToString(int16_t hours, int16_t minutes) {
+        if (hours == 99) return String("DSTSTD");
+        char buffer[16];
+        const int length = snprintf(buffer, sizeof(buffer), "%c%02d:%02d", hours < 0 || minutes < 0 ? '-' : '+', abs(hours), abs(minutes));
+        if (length < 0 || static_cast<size_t>(length) >= sizeof(buffer)) return String();
+        return String(buffer);
     }
 
-    void parseTimeZone(const char* ts, int16_t *tz_h_param, int16_t *tz_m_param){
-        int16_t tz_h = 0;
-        int16_t tz_m = 0;
-        char* data = strdup(ts);
-        if (strlen(ts)) {
-            char* p = strtok(data, ":");
+    bool parseTimeZone(const char* text, int16_t* hours, int16_t* minutes) {
+        return parseTimeZoneComponents(text, WHoursOutput(hours), minutes);
+    }
 
-            tz_h = strtol(p, nullptr, 10);
-            if (tz_h > 13 || tz_h < -13) {
-                tz_h = 99;
-            }
-            if (p) {
-                p = strtok(nullptr, ":");
-                if (p) {
-                    tz_m = strtol(p, nullptr, 10);
-                    if (tz_m > 59) {
-                        tz_m = 59;
-                    } else if (tz_m < 0) {
-                        tz_m = 0;
-                    }
-                }
-            }
-        } else {
-            tz_h = 99;
-            tz_m = 0;
+    bool parseTimeZoneComponents(const char* text, WHoursOutput hours, int16_t* minutes) {
+        *hours.value = 99; *minutes = 0;
+        if (!text || !*text || !strcmp(text, "99")) return true;
+        const bool negative = *text == '-';
+        char* end;
+        const long hour = strtol(text, &end, 10);
+        if (end == text || hour < -14 || hour > 14) return false;
+        long minute = 0;
+        if (*end == ':') {
+            const char* begin = end + 1;
+            if (*begin < '0' || *begin > '9') return false;
+            minute = strtol(begin, &end, 10);
         }
-        *tz_h_param=tz_h;
-        *tz_m_param=tz_m;
-        //return (tz_h * 60) + (tz_h >= 0 ? tz_m : tz_m * -1);
+        if (*end || minute < 0 || minute > 59 || (abs(hour) == 14 && minute != 0)) return false;
+        *hours.value = static_cast<int16_t>(hour);
+        *minutes = static_cast<int16_t>(hour == 0 && negative ? -minute : minute);
+        return true;
     }
 
     void BreakTime(uint32_t time_input, TIME_T& tm) {
@@ -695,13 +627,13 @@ class WClock : public WDevice {
         }
         tm.year = year+1970;  // year is offset from 1970
 
-        days -= LEAP_YEAR(year) ? 366 : 365;
+        days -= LEAP_YEAR(tm.year) ? 366 : 365;
         time -= days;  // now it is days in this year, starting at 0
         tm.day_of_year = time;
 
         for (month = 0; month < 12; month++) {
             if (1 == month) {  // february
-                if (LEAP_YEAR(year)) {
+                if (LEAP_YEAR(tm.year)) {
                     month_length = 29;
                 } else {
                     month_length = 28;
@@ -716,7 +648,7 @@ class WClock : public WDevice {
                 break;
             }
         }
-        strlcpy(tm.name_of_month, kMonthNames + (month * 3), 4);
+        strlcpy(tm.name_of_month, kMonthNames + (static_cast<size_t>(month) * 3), 4);
         tm.month = month + 1;                        // jan is month 1
         tm.day_of_month = time + 1;                  // day of month
         tm.valid = (time_input > START_VALID_TIME);  // 2016-01-01
@@ -782,11 +714,11 @@ class WClock : public WDevice {
         return t;
     }
 
-    bool hasInfoPage() {
+    bool hasInfoPage() override {
         return true;
     }
 
-    void printInfoPage(AsyncResponseStream* page) {
+    void printInfoPage(AsyncResponseStream* page) override {
         htmlTableRowTitle(page, F("Time-Valid:"));
         page->print((isValidTime()  ? "Yes" : "No"));
         htmlTableRowEnd(page);
@@ -801,7 +733,7 @@ class WClock : public WDevice {
 
         page->print(F("<tr><th>Last-NTP-Sync Try:</th><td>"));
         if (lastTry){
-            page->printf("%d Seconds ago", (millis()-lastTry)/1000);
+            page->printf("%lu Seconds ago", (millis()-lastTry)/1000);
         } else {
             page->print(F("Never"));
         }        
@@ -809,7 +741,7 @@ class WClock : public WDevice {
 
         htmlTableRowTitle(page, F("Last-NTP-Sync with Success:"));
         if (lastNtpSync){
-            page->printf("%d Seconds ago", (millis()-lastNtpSync)/1000);
+            page->printf("%lu Seconds ago", (millis()-lastNtpSync)/1000);
         } else {
             page->print(F("Never"));
         }

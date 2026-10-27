@@ -1,7 +1,7 @@
 import serial
 from serial.tools import miniterm
 from os.path import expanduser
-import subprocess, sys, re, os
+import subprocess, sys, re, os, shutil
 
 class ESPMiniterm(miniterm.Miniterm):
   def handle_menu_key(self, c):
@@ -104,7 +104,7 @@ class ESPStackDecoder(miniterm.Transform):
       self.rxbuf = self.rxbuf[prev:]
     return text
   def handle_line(self, line):
-    m = re.search("Exception \\(([0-9]*)\\):\s*$", line)
+    m = re.search(r"Exception \(([0-9]*)\):\s*$", line)
     if m:
       if int(m.group(1)) in self.EXCEPTION_CAUSES:
         return " -> Exception cause: %s\n" % (self.EXCEPTION_CAUSES[int(m.group(1))],)
@@ -130,14 +130,22 @@ class ESPStackDecoder(miniterm.Transform):
       return ""
     home = expanduser("~")
     # home os.environ["HOME"]
-    output = subprocess.check_output([home + "/.platformio/packages/toolchain-xtensa/bin/xtensa-lx106-elf-addr2line.exe", "-aipfC", "-e", ".pioenvs/wthermostat-debug/firmware.elf"] + addrs)
-    return output
+    tool = shutil.which("xtensa-lx106-elf-addr2line")
+    if not tool:
+      binary = "xtensa-lx106-elf-addr2line" + (".exe" if os.name == "nt" else "")
+      tool = os.path.join(os.environ.get("PLATFORMIO_CORE_DIR", os.path.join(home, ".platformio")),
+                          "packages", "toolchain-xtensa", "bin", binary)
+    try:
+      return subprocess.check_output([tool, "-aipfC", "-e", ".pioenvs/wthermostat-debug/firmware.elf"] + addrs,
+                                     text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as error:
+      return "Stack decode unavailable: %s\n" % error
 
 miniterm.TRANSFORMATIONS['espstackdecoder'] = ESPStackDecoder
 
 #miniterm.main(default_port="/dev/ttyUSB0", default_baudrate=115200)
 serial_instance = serial.serial_for_url(
-                "COM4",
+                os.environ.get("WTHERMOSTAT_SERIAL_PORT", "COM4" if os.name == "nt" else "/dev/ttyUSB0"),
                 115200,
                 do_not_open = True)
 

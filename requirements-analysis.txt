@@ -1,0 +1,4 @@
+# Optional isolated Python analyzers; firmware build dependencies stay separate.
+ruff==0.17.3
+bandit==1.9.4
+semgrep==1.182.1
