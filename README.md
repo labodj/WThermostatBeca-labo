@@ -1,596 +1,251 @@
-# WThermostat - FAS-Fork
+# WThermostatBeca-labo
 
-[![GitHub version](https://img.shields.io/github/release/fashberg/WThermostatBeca.svg)](https://github.com/fashberg/WThermostatBeca/releases/latest)
-[![GitHub release (latest by date including pre-releases)](https://img.shields.io/github/v/release/fashberg/WThermostatBeca?include_prereleases&label=beta)](https://github.com/fashberg/WThermostatBeca/releases)
-[![GitHub download](https://img.shields.io/github/downloads/fashberg/WThermostatBeca/total.svg)](https://github.com/fashberg/WThermostatBeca/releases/latest)
-[![Gitpod ready-to-code](https://img.shields.io/badge/Gitpod-ready--to--code-blue?logo=gitpod)](https://gitpod.io/#https://github.com/fashberg/WThermostatBeca)
-[![Github Actions](https://img.shields.io/github/workflow/status/fashberg/WThermostatBeca/Build)](https://github.com/fashberg/WThermostatBeca/actions)
+Local-control firmware for compatible **ESP8266 Beca/Moes/Qiumi Wi-Fi thermostats**, without a Tuya cloud dependency. This is the maintenance fork of [fashberg/WThermostatBeca](https://github.com/fashberg/WThermostatBeca), originally based on [klausahrenberg/WThermostatBeca](https://github.com/klausahrenberg/WThermostatBeca).
 
-Fork of <https://github.com/klausahrenberg/WThermostatBeca> with some new features.
+**Current pre-release: [v1.25.0-labo.4](https://github.com/labodj/WThermostatBeca-labo/releases/tag/v1.25.0-labo.4).** See GitHub Releases for changes, firmware downloads and upgrade notes.
 
-Replaces original Tuya firmware on Beca/Moes/Qiumi thermostat with ESP8266 WiFi module.
+[![Build](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml/badge.svg)](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml)
+[![Release including pre-releases](https://img.shields.io/github/v/release/labodj/WThermostatBeca-labo?include_prereleases)](https://github.com/labodj/WThermostatBeca-labo/releases)
 
-## Supported Devices
+## Get the firmware
 
-The firmware has been tested or reported to work with following devices:
+| File in the release | Purpose |
+|---|---|
+| **[`wthermostat-1.25.0-labo.4.bin`](https://github.com/labodj/WThermostatBeca-labo/releases/download/v1.25.0-labo.4/wthermostat-1.25.0-labo.4.bin)** | Normal firmware for a supported thermostat; use this image for an ordinary upgrade. |
+| `wthermostat-1.25.0-labo.4.bin.gz` | The same image compressed for OTA paths that support gzip; not for direct serial flashing. |
+| `wthermostat-minimal-1.25.0-labo.4.bin` / `.bin.gz` | Temporary OTA bridge when space is insufficient. It has **no thermostat control, MQTT or clock**; replace it with normal firmware afterwards. |
+| `wthermostat-symbols-1.25.0-labo.4.zip` | Matching normal ELF/MAP files for diagnosis, not a flash image. |
+| `SHA256SUMS`, `BUILD-MANIFEST.json`, `SOURCE-MANIFEST.json` | Artifact checksums, build/image validation and source provenance. |
 
-* BHT-002 WiFi Thermostat
-  * BHT-002-GALW (Water/Gas heating)
-  * BHT-002-GBLW (Electrical floor heating)
-  * BHT-002-GCLW (Water/Gas Boiler)
-* BHT-6000 WiFi Thermostat
-  * BHT-6000-GALW, BHT-6000-GBLW, BHT-6000-GCLW
-* BHT-3000 WiFi Thermostat
-  * BHT-3000-GALW, BHT-3000-GBLW, BHT-3000-GCLW
-  * also known as BTH-3000L-ABLW, BTH-3000L-GBLW, BTH-3000L-GCLW
-* BAC-1000-ALW WiFi Thermostat for Conditioning (heating, cooling, ventilation)
-  * also known as BAC-002-ALW
+The normal image is built for **ESP8266, 1 MiB flash, DOUT, 40 MHz flash / 80 MHz CPU**. Check the hardware before installation. Debug firmware is for development boards only: its UART log output conflicts with the thermostat MCU. It is not published as an installable thermostat image.
 
-![homeassistant](docs/images/bac-002-wifi.jpg)
+Verify downloaded files from their directory:
 
-## Features
+```sh
+sha256sum -c SHA256SUMS
+```
 
-* No Cloud dependencies!
-* Enables thermostat to communicate via MQTT and/or Mozilla WebThings
-* Autodiscovery for WebThings via mDNS
-* Configuration of connection, device parameters and schedules via web interface
-* Provides NTP, time zone handling and Daylight-Saving-Calculation to set the clock of thermostat
-* Provides Fallback to Access Point mode if requested using panel-buttons
-* Reading and setting of all parameters via MQTT
-* Reading and setting of main parameters via WebThings
-* Only BHT-002-GxLW: actualFloorTemperature (external temperature sensor)
-* Only BAC-002-ALW: fanSpeed:auto|low|medium|high; systemMode:cooling|heating|ventilation
-* Reading and setting of time schedules via MQTT
-* Reading and setting of Schedules via Web-GUI
-* Automatic switching back to temperature-scheduling from manual mode next schedule interval (optional)
-* **FAS-Fork enhancements**
-  * RelayStateCalculation - shows current state of heating/cooling - without soldering _(fas)_
-  * Autodiscovery for Home Assistant via MQTT _(fas)_
-  * Logging to MQTT _(fas)_
-  * Logging to WebBrowser using Websockets _(fas)_
-  * Captive Portal support for setup _(fas)_
-  * show password in cleartext for setup _(fas)_
-  * TimeBug Workaround (precicion fixed to 1 sec) _(fas)_
-  * All State Information at status page _(fas)_
-  * GitPod-Support _(fas)_
-  * PlatformIO Direct OTA-Upload to device _(fas)_
-  * Eco-Mode fixed to 20 degrees _(fas)_
-  * RSSI Information (Info-Page, MQTT and Home-Assistant Support) _(fas)_
-  * More detailed Documentation _(fas)_
+## Hardware compatibility
 
-_(fas)_: Only available in -fas version
+These families were supported or reported working by the original projects; that history does **not** mean every revision has been tested with this release:
 
-## Hardware-Versions
+| Family | Historical variants | Controller profile |
+|---|---|---|
+| BHT-002 | GALW, GBLW, GCLW | Heating |
+| BHT-3000 / BTH-3000L | GALW/ABLW, GBLW, GCLW | Heating |
+| BHT-6000 | GALW, GBLW, GCLW | Heating |
+| BAC-002-ALW / BAC-1000-ALW | Wi-Fi air-conditioning variants | Heating, cooling, ventilation |
 
-You need the WiFi Version! (W in product name suffix, like -GAL**W**). There are also a versions without WLAN (Offline-Version and ZigBee-Version (-GALZBW)). See [Diagnose Can we add WiFi to Non-WiFi Thermostat bac-002.pdf](./docs/Diagnose%20Can%20we%20add%20WiFi%20to%20Non-WiFi%20Thermostat%20bac-002.pdf)
+The module must actually be **ESP8266** and use the compatible MCU protocol. A product name or Wi-Fi suffix alone does not identify the module; offline, Zigbee, ESP32 and other chip variants are not targets of this image. GA/GB/GC describe different output arrangements; select the correct device profile and retain the manufacturer's wiring specification.
 
-The BHT Version is for heating only. The BAC-Version has modes Cooling, Heating and Ventilation.
-The BHT-002-GA/GB/GC versions only differs in relays-wiring.
+The ESP8266 communicates with the thermostat's separate MCU over UART. This firmware updates the ESP8266, **not** the MCU firmware. Temperature sensing, display, relay control and scheduling remain constrained by the MCU and device model. Reported `action` can be calculated rather than measured relay feedback.
 
-### Difference between GA, GB and GC
+Historical hardware references: [installation](Installation.md), [first-flash guide](Flashing.md), [hardware diagram](docs/images/how-it-works.png). Those older guides are references for the original hardware, not proof that a particular current Tuya device supports their conversion method.
 
-* GA - Water-Heating
-  * Two Relays for opening and closing valve
-  * Only one Relay will be closed at the same time
-  * Closing Relay PIN 1 - PIN 3 (N or L)
-  * Opening Relay PIN 2 - PIN 3 (N or L)
-  * Product Spec says Max Power: 3 A
-* GB - Electric-Heating
-  * Connect Heating between PIN 1 and PIN 2
-  * Product Spec says Max Power: 16 A
-* GC - Water/Gas Boiler
-  * One Relay - potential free (dry contact)
-  * Relay on PIN 1 - PIN 2 (dry contacts)
-  * Product Spec says Max Power: 3 A
+## What this fork provides
 
-### Hardware Installation
+- Local web configuration, schedules, clock diagnostics, firmware updates and live logs.
+- MQTT state/control, retained state and availability, and Home Assistant discovery.
+- Read-only WebThings access and authenticated property writes.
+- NTP, timezone/DST rules and existing MCU time/calibration workarounds.
+- Optional Wi-Fi BSSID lock, preserved across reconnections, with timed recovery AP.
+- Optional administrator authentication (enabled by default), POST/CSRF protections and per-request HTTP buffers.
+- Bounded schedule, UART, JSON and MQTT parsing, corrected resource ownership and numeric serialization.
+- Vendored WAdapter, pinned build dependencies, sanitizer-backed regression tests and repeatable static analysis.
 
-Here a description of how to install the hardware - indepentdent from Open Source WThermostat.
-**No special Hardware installation necessary for Upgrading to this firmware!**
+BAC adds system/fan modes; BHT can expose an enabled external floor sensor. Available settings and entities depend on the chosen profile and hardware.
 
-* see [Installation.md](Installation.md)
+## First installation and setup
 
-## Download binaries
+If WThermostat is already installed, use the upgrade section below. For a stock Tuya device, the available first-flash method depends on its module and existing firmware; the historical tuya-convert instructions are not a universal OTA installation method. Serial installation requires access to the compatible module and the original hardware precautions in [Flashing.md](Flashing.md).
 
-Pre-built binaries can be downloaded at [releases-page](https://github.com/fashberg/WThermostatBeca/releases).
+On initial setup:
 
-## Software Installation
+1. Connect to the configuration AP, normally named `WThermostat-<chip-id>`, using AP password `12345678`.
+2. Open `http://192.168.4.1/` if the captive portal does not open automatically.
+3. Save the 2.4 GHz Wi-Fi connection and obtain the thermostat's address from your router.
+4. Open `http://<device-ip>/`, then configure the correct thermostat profile, temperature precision, clock and schedules.
+5. Configure MQTT and Home Assistant discovery if required.
 
-:warning: **Nearly all devices are now shipped with a new Firmware which cannot be upgraded Over The Air with non-tuya-servers.**
- In this case you cannot longer use tuya-convert and you have to open the device for soldering or use a 3d-printed pogo-adapter.
+The AP password and the administrative web password are different roles. After Wi-Fi is configured, administration requires login by default: **username `admin` and the saved Wi-Fi password**. The login requirement can be disabled explicitly in Network Configuration. MQTT keeps its separately configured broker credentials.
 
-You can install the firmware either
+Initial provisioning is accessible before a Wi-Fi configuration exists. When administrator login is enabled, a fallback AP with saved credentials does not bypass it. An explicitly requested setup AP provides the existing passwordless-configuration recovery path. More background: [configuration guide](Configuration.md); its legacy screenshots and authentication descriptions may differ from this release.
 
-* by using tuya-convert - no Hardware Modifications necessary
-* by soldering cables to the ESP-Modules using an ESP/Arduino-Programmer (3,3 Volt TTL)
-* by using OTA Upgrade on tasmota or other Open Source ESP Firmware
+## Upgrade an existing thermostat
 
-Yoube video of converting to 1.14-fas with tuya-convert: <https://youtu.be/fqfghJqnK_8>
+1. Keep a copy of the previous firmware and record the current model/settings.
+2. Download the **normal BIN** above, verify its checksum, and use the thermostat's web firmware-update page. Keep power connected and check the displayed OTA capacity.
+3. After reboot, reload the page and sign in with `admin` and the configured Wi-Fi password.
+4. Verify model, Wi-Fi/MQTT, time, schedules and Home Assistant availability on the physical device.
 
-Follow instructions here: [Flashing.md](Flashing.md)
+A reset is not required for the legacy fashberg settings layouts covered by the tests: field offsets, sizes and version flags are preserved. The BSSID extension uses previously unused EEPROM tail bytes. Much older upstream layouts may follow their existing migration path; do not assume every setting from every historic firmware will survive.
 
-## Initial configuration
+If the normal image cannot fit, the minimal image is a temporary bridge, not a usable thermostat firmware. Complete the second upgrade to normal firmware. Compressed OTA is available where the update path supports it. Local size calculations and valid image checksums are not a physical OTA test.
 
-* The devices becomes an Access Point
-* Connect to WiFi `Thermostat-xxxxxx` with Password `12345678`
-* Open `http://192.168.4.1` or wait for Captive Portal to be opened on Android
-* Configure your WiFi Settings
-* After initial setup, the device configuration is available at `http://<device_ip>/`
-* Configure device model, clock and other settings
+## Administration and security
 
-See [Configuration.md](Configuration.md) for a detailed explanation of the setup.
+| Interface | Access |
+|---|---|
+| Web configuration, info, firmware update and live log | HTTP Digest by default: `admin` / saved Wi-Fi password; optional login setting |
+| Configuration, reset and MCU reinitialization | POST; login when enabled, browser forms always include CSRF protection |
+| WebThings property reads | Anonymous read-only GET |
+| WebThings property writes | PUT; HTTP Digest when login is enabled |
+| MQTT | Existing broker credentials and broker access policy |
 
-## Upgrading
+**Require administrator login** in Network Configuration controls web, OTA, WebThings writes and WebSocket log access. It defaults to enabled for existing valid configurations; old forms without the new option preserve the current choice. Disabling it lets anyone who can reach the device administer it and upload firmware. POST, Origin and configuration-form CSRF checks remain active; MQTT credentials are unaffected. Saving the setting restarts the device. Enabling login with an empty Wi-Fi password is rejected before settings are changed.
 
-You can Upgrade over the Air from other versions of WThermostatBeca on the Web-GUI.
-Please check all settings after Upgrade!
+This switch must be changed while you can still access the device. It is not an anonymous password-reset endpoint; if login is enabled and the Wi-Fi password is lost, recover the password or use an authorized physical recovery/reflash procedure.
 
-If you upgrade from Klaus-Ahrenberg's version, please note:
+HTTP Digest authenticates requests but **does not encrypt HTTP traffic**. Use a trusted network. Do not expose the thermostat's administration directly to the Internet. Password values are not written to diagnostic logs.
 
-* Only WLAN settings are kept
-* If you get "Not Enough Space" you can use WThermostat_1.xx-fas-minial.bin as interim version.
-  * WLAN settings are kept
-  * no MQTT, no Beca-control, no Clock in -minimal
-  * Then Upgrade to normal version
-  * Not necessary when upgrading from fas to fas versions
+The command-line OTA uploader prompts for the password; it does not take a password argument. Replace the documentation address `192.0.2.10` with the device address:
+
+```sh
+python pio/espupload.py --host 192.0.2.10 --file wthermostat-1.25.0-labo.4.bin
+```
+
+For unattended use, supply `WTHERMOSTAT_PASSWORD` through an appropriate protected environment. No device address is configured as a default upload destination.
+
+## Optional BSSID lock and recovery
+
+In **Network Configuration**, leave **AP BSSID** empty for automatic AP selection, or enter a unicast MAC such as `02:11:22:33:44:55` to select one AP. The lock applies to initial connection and reconnections. The channel remains automatic, so that AP can change channel. BSSID selection is not an authentication boundary.
+
+If the locked AP is unavailable for **120 seconds continuously**, a recovery AP opens even when ordinary AP fallback is disabled. The normal/minimal configuration window lasts **five minutes**; opening Network Configuration refreshes it. Change or clear the BSSID, and update SSID/password if replacing an AP. If administrator login is enabled, saved credentials still protect the web interface.
+
+When the window expires, the firmware retries the locked AP and repeats recovery if necessary. The lock is never silently removed. Manual setup requests take priority; OTA activity defers mode changes. Info shows both the configured lock and connected AP BSSID. Physical radio/failure recovery remains a hardware qualification item.
+
+## Home Assistant
+
+Use MQTT discovery rather than copying the old `climate: - platform: mqtt` examples.
+
+1. Add/configure the [MQTT integration](https://www.home-assistant.io/integrations/mqtt/) in Home Assistant under **Settings → Devices & services**, connecting it to your broker.
+2. Configure the thermostat to use that same broker and enable MQTT and Home Assistant discovery in Network Configuration.
+3. Use the supported defaults: discovery prefix **`homeassistant`** and Home Assistant Birth topic **`homeassistant/status`** with payload **`online`**. Custom prefixes/Birth topics are not automatically detected by this firmware.
+4. Check the MQTT device/entities in Home Assistant. Climate availability also waits for a complete valid MCU state, avoiding incomplete startup readings.
+
+Discovery includes climate, schedules/diagnostics and the applicable optional floor-temperature entity. Existing supported entity IDs are retained. The firmware republishes discovery and retained state after MQTT reconnection and supported HA Birth events, retries failed discovery and clears obsolete configurations. A thermostat reboot is not required for every HA restart.
+
+Broker persistence remains useful for retained messages across broker restarts, but does not replace correct broker/thermostat connectivity. Consult the [MQTT discovery documentation](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery) for Home Assistant's behavior. Configure broker settings according to its own documentation; there is no universal legacy `mqtt: broker:` YAML block to paste into modern Home Assistant.
+
+| Profile | HVAC modes | Presets |
+|---|---|---|
+| BHT heating | `off`, `heat`, `auto` | `none`, `away` |
+| BAC air conditioning | `off`, `heat`, `cool`, `fan_only` | `none`, `away`, `scheduler` |
+
+BAC scheduling is a preset/hold state, not automatic selection between heating and cooling. Entity precision and optional features follow the device profile. The release is checked with **Home Assistant 2026.10.4**: two official-schema tests cover 126 discovery payloads, expansion, templates and negative cases. This is version-specific software evidence, not certification for every future HA release or every physical thermostat.
+
+If manual entities are needed, use the current [MQTT climate documentation](https://www.home-assistant.io/integrations/climate.mqtt/) and the actual topics/properties below. Avoid configuring duplicate manual and discovered entities unintentionally.
+
+## MQTT and WebThings API
+
+Let `<base>` be the MQTT topic configured on the thermostat, for example `home/room`.
+
+| Topic | Direction / purpose |
+|---|---|
+| `<base>/stat/things/thermostat/properties` | Retained thermostat state |
+| `<base>/cmnd/things/thermostat/properties` | Empty payload requests state; a JSON object changes properties |
+| `<base>/cmnd/things/thermostat/properties/<property>` | Change one writable property |
+| `<base>/stat/things/thermostat/schedules` | Schedule report |
+| `<base>/cmnd/things/thermostat/schedules` | Empty payload requests schedules; JSON changes entries |
+| `<base>/tele/LWT` | Retained Wi-Fi/MQTT availability: `Online` / `Offline` |
+| `<base>/tele/mcu` | Retained MCU readiness used by discovery |
+| `<base>/tele/log` | Diagnostic log, when enabled |
+
+Read-only request example:
+
+```sh
+mosquitto_pub -h mqtt.example.test -t home/room/cmnd/things/thermostat/properties -n
+mosquitto_sub -h mqtt.example.test -t home/room/stat/things/thermostat/properties -v
+```
+
+Replace `mqtt.example.test` with your broker and supply its required authentication using your client configuration. Writable examples below **change thermostat operation**:
+
+```sh
+mosquitto_pub -h mqtt.example.test -t home/room/cmnd/things/thermostat/properties \
+  -m '{"targetTemperature":22.0,"mode":"heat"}'
+```
+
+Common state properties include `temperature`, `targetTemperature`, `deviceOn`, `schedulesMode`, `ecoMode`, `locked`, `mode`, `preset` and `action`. BAC additionally exposes `systemMode` and `fanMode`; floor temperature depends on BHT configuration. The legacy scheduling alias `holdState` is MQTT-only. Use the selected device's WebThings description for its actual properties and allowed values. `action` is read-only.
+
+Schedules use six periods in each of three day groups (`w`, `a`, `u`); group interpretation follows the configured schedule day offset. A partial update has the form:
+
+```json
+{"w1h":"06:00","w1t":20.0,"w2h":"08:00","w2t":17.0}
+```
+
+Time strings must be valid `HH:MM`, entries must remain ordered, and temperatures must satisfy configured bounds/precision. Invalid updates are rejected before being applied.
+
+Read-only HTTP endpoints include:
+
+```text
+GET /things/thermostat
+GET /things/thermostat/properties
+GET /things/thermostat/schedules
+```
+
+Property writes use HTTP Digest PUT on the property endpoints. WebThings gateway behavior depends on its support for that authentication; this release does not provide a remote-access cloud service.
 
 ## Screenshots
 
-Main Screen:
+| Home | Clock |
+| --- | --- |
+| ![Home](docs/images/interface/home.png) | ![Clock settings](docs/images/interface/clock.png) |
 
-![setup_main](docs/images/Setup_Main.png)  
+| Thermostat | Network |
+| --- | --- |
+| ![Thermostat settings](docs/images/interface/thermostat.png) | ![Network settings](docs/images/interface/network.png) |
 
-Network Screen:
+![Schedules](docs/images/interface/schedules.png)
 
-![setup_network](docs/images/Setup_Network.png)  
+## Build and test
 
-Schedule Screen:
-
-![setup_schedules](docs/images/Setup_Schedules.png)  
-
-Live WebLog Screen:
-
-![weblog_screen](docs/images/weblog.png)  
-
-## Integration in Home Assistant
-
-![homeassistant](docs/images/homeassistant.png)
-![homeassistant](docs/images/hass_detail.png)
-![hass_discovery](docs/images/hass_discovery.png)
-
-### Controlling BAC in HomeAssistant
-
-* Use Operation to Switch between 'heat', 'cool', 'fan_only' and 'off'
-* Use Preset to switch between 'None' (manual), 'Scheduler' and 'eco'
-* Changing temp disables scheduler and switches to preset 'None'
-
-![homeassistant](docs/images/hass-bac.png)
-
-### HASS Autodiscovery
-
-WThermostatBeca supports optional HASS-Autodiscovery since Version 1.08-fas.
-You must enable it at Thermostat (settings network) and of course it must be enabled in your HASS configuration.yaml file:
-
-```yaml
-mqtt:
-  broker: <ip of broker>
-  discovery: true
-  discovery_prefix: homeassistant
-```
-
-#### Use a persistent MQTT-Broker
-
-You should use a persistent MQTT-Broker, keeping all retained messages during reboot/restart.
-HASS integrated MQTT broker is not persistent.
-Otherwise all autodiscovered messages are getting lost and you must reboot all devices, to send HASS autodiscover messages again!
-See: <https://www.home-assistant.io/docs/mqtt/discovery/>
-
-Example for users of mosquitto, file mosquitto.conf:
+The validated development host is **Linux x86_64, Python 3.14.10**, with g++/ASan/UBSan, Node.js for JavaScript checks, and PlatformIO **6.2.0**. Other hosts need a compatible toolchain override in `platformio_override.ini`. WAdapter is already included in the repository; no submodule initialization is required.
 
 ```sh
-persistence true
-persistence_file mosquitto.db
-persistence_location /var/lib/mosquitto/
-autosave_interval 1800
-# The default if not set is to never expire persistent clients.
-persistent_client_expiration 24h
-
+git clone https://github.com/labodj/WThermostatBeca-labo.git
+cd WThermostatBeca-labo
+python3.14 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+python -m unittest discover -s tests -v
+pio run -e wthermostat
 ```
 
-See <https://mosquitto.org/man/mosquitto-conf-5.html> for more details.
+The normal image is written to `build_output/firmware/wthermostat-1.25.0-labo.4.bin`; matching ELF/MAP files are in `build_output/map/`. An optional `platformio_override.ini` can change local settings; copying the sample also overrides `appversion`, so remove or edit that sample value if you want the release filename.
 
-### HASS Manual Configuration
-
-For manual Configuration here is an example for your configuration.yaml file:
-
-**Heating:**
-
-```yaml
-climate:
-  - platform: mqtt
-    name: Room_Thermostat
-    availability_topic: "home/room/tele/LWT"
-    payload_available: "Online"
-    payload_not_available: "Offline"
-    action_topic: "home/room/stat/things/thermostat/properties"
-    action_template: "{{value_json.action}}"
-    temperature_command_topic: "home/room/cmnd/things/thermostat/properties/targetTemperature"
-    temperature_state_topic: "home/room/stat/things/thermostat/properties"
-    temperature_state_template: "{{value_json.targetTemperature}}"
-    current_temperature_topic: "home/room/stat/things/thermostat/properties"
-    current_temperature_template: "{{value_json.temperature}}"
-    mode_command_topic: "home/room/cmnd/things/thermostat/properties/mode"
-    mode_state_topic: "home/room/stat/things/thermostat/properties"
-    mode_state_template: "{{value_json.mode}}"
-    modes: [ "heat", "auto", "off" ]
-    preset_mode_command_topic: "home/room/cmnd/things/thermostat/properties/preset"
-    preset_mode_state_topic: "home/room/stat/things/thermostat/properties"
-    preset_mode_value_template: "{{value_json.preset}}"
-    preset_modes: ["away"]
-    min_temp: 5
-    max_temp: 35
-    temp_step: 0.5
-    precision: 0.5
-```
-
-**Air Conditioning:**
-
-The BAC-002/BAC-1000 does not support auto mode. The Device (MCU) can not switch automatically between heating, cooling or fan mode.
-
-To Switch between Automatic Scheduling and Manual Mode we use 'holdState' with the following mode: 'scheduler' and 'manual', combined with mode 'eco'.
-If you choose 'None' it disables 'eco' and device jumps back to last mode (scheduler/manual).
-Do not use away_mode_ combined with holdState.
-
-```yaml
-climate:
-  - platform: mqtt
-    name: Bedroom AC Control
-    availability_topic: "home/bedroom/tele/LWT"
-    payload_available: "Online"
-    payload_not_available: "Offline"
-    action_topic: "home/bedroom/stat/things/thermostat/properties"
-    action_template: "{{value_json.action}}"
-    temperature_command_topic: "home/bedroom/cmnd/things/thermostat/properties/targetTemperature"
-    temperature_state_topic: "home/bedroom/stat/things/thermostat/properties"
-    temperature_state_template: "{{value_json.targetTemperature}}"
-    current_temperature_topic: "home/bedroom/stat/things/thermostat/properties"
-    current_temperature_template: "{{value_json.temperature}}"
-    mode_command_topic: "home/bedroom/cmnd/things/thermostat/properties/mode"
-    mode_state_topic: "home/bedroom/stat/things/thermostat/properties"
-    mode_state_template: "{{value_json.mode}}"
-    fan_mode_command_topic: "home/bedroom/cmnd/things/thermostat/properties/fanMode"
-    fan_mode_state_topic: "home/bedroom/stat/things/thermostat/properties"
-    fan_mode_state_template: "{{value_json.fanMode}}"
-    modes: [ "heat", "cool", "fan_only", "off" ]
-    min_temp: 16
-    max_temp: 32
-    temp_step: 1
-    precision: 0.5
-```
-
-If you have several thermostats you can anchor some settings while defining the first device and refer later. Example:
-
-```yaml
-climate:
-- platform: mqtt
-  name: Wohnzimmer_Thermostat
-  availability_topic: "home/wohnzimmer/tele/LWT"
-  action_topic: "home/wohnzimmer/stat/things/thermostat/properties"
-  temperature_command_topic: "home/wohnzimmer/cmnd/things/thermostat/properties/targetTemperature"
-  temperature_state_topic: "home/wohnzimmer/stat/things/thermostat/properties"
-  current_temperature_topic: "home/wohnzimmer/stat/things/thermostat/properties"
-  mode_command_topic: "home/wohnzimmer/cmnd/things/thermostat/properties/mode"
-  mode_state_topic: "home/wohnzimmer/stat/things/thermostat/properties"
-  preset_mode_command_topic: "home/wohnzimmer/cmnd/things/thermostat/properties/preset"
-  preset_mode_state_topic: "home/wohnzimmer/stat/things/thermostat/properties"
-  <<: &commonbeca
-    payload_available: "Online"
-    payload_not_available: "Offline"
-    action_template: "{{value_json.action}}"
-    temperature_state_template: "{{value_json.targetTemperature}}"
-    current_temperature_template: "{{value_json.temperature}}"
-    mode_state_template: "{{value_json.mode}}"
-    away_mode_state_template: "{{value_json.ecoMode}}"
-    modes: [ "heat", "auto", "off" ]
-    preset_mode_value_template: "{{value_json.preset}}"
-    preset_modes: ["away"]
-    min_temp: 5
-    max_temp: 35
-    temp_step: 0.5
-    precision: 0.5
-- platform: mqtt
-  name: Flur_Thermostat
-  availability_topic: "home/flur/tele/LWT"
-  action_topic: "home/flur/stat/things/thermostat/properties"
-  temperature_command_topic: "home/flur/cmnd/things/thermostat/properties/targetTemperature"
-  temperature_state_topic: "home/flur/stat/things/thermostat/properties"
-  current_temperature_topic: "home/flur/stat/things/thermostat/properties"
-  away_mode_command_topic: "home/flur/cmnd/things/thermostat/properties/ecoMode"
-  away_mode_state_topic: "home/flur/stat/things/thermostat/properties"
-  mode_command_topic: "home/flur/cmnd/things/thermostat/properties/mode"
-  mode_state_topic: "home/flur/stat/things/thermostat/properties"
-  preset_mode_command_topic: "home/flur/cmnd/things/thermostat/properties/preset"
-  preset_mode_state_topic: "home/flur/stat/things/thermostat/properties"
-  <<: *commonbeca
-- platform: mqtt
-  name: WC_Thermostat
-  availability_topic: "home/wc/tele/LWT"
-  action_topic: "home/wc/stat/things/thermostat/properties"
-  temperature_command_topic: "home/wc/cmnd/things/thermostat/properties/targetTemperature"
-  temperature_state_topic: "home/wc/stat/things/thermostat/properties"
-  current_temperature_topic: "home/wc/stat/things/thermostat/properties"
-  away_mode_command_topic: "home/wc/cmnd/things/thermostat/properties/ecoMode"
-  away_mode_state_topic: "home/wc/stat/things/thermostat/properties"
-  mode_command_topic: "home/wc/cmnd/things/thermostat/properties/mode"
-  mode_state_topic: "home/wc/stat/things/thermostat/properties"
-  preset_mode_command_topic: "home/wc/cmnd/things/thermostat/properties/preset"
-  preset_mode_state_topic: "home/wc/stat/things/thermostat/properties"
-  <<: *commonbeca
-```
-
-See <https://www.home-assistant.io/integrations/climate.mqtt/> for more information.
-
-## Integration in WebThings
-
-Since version 0.96 this firmware supports Mozilla WebThings directly. With webthings you can control the thermostat via the Gateway - inside and also outside of your home network. No clunky VPN, dynDNS solutions needed to access your home devices. I recommend to run the gateway in parallel to an MQTT server and for example Node-Red. Via MQTT you can control the thermostat completely and logic can be done by Node-Red. WebThings is used for outside control of main parameters.  
-Add the device to the gateway via '+' icon. After that you have the new nice and shiny icon in the dashboard:  
-![webthing_icon](docs/images/Webthing_Icon.png)  
-The icon shows the actual temperature and heating state.
-
-There is also a detailed view available:
-
-![webthing](docs/images/Webthing_Complete.png)  
-
-## Device-Functions
-
-### JSON structures
-
-The software provides different messages:
-
-1. Thermostat State report (JSON)
-2. Schedules (JSON)
-3. Device (at start of device to let you know the topics and ip)
-4. Logs (Plain)
-
-#### 1. Thermostat State report
-
-**MQTT:** State report is provided every 5 minutes, at change of a parameter or at request via message with empty payload to `<your_topic>/cmnd/things/thermostat/properties` , reports are sent to `<your_topic>/stat/things/thermostat/properties`.
-The state report is sent with MQTT-retain-flag enabled.
-
-**WebThings:** State report can be requested by: `http://<device_ip>/things/thermostat/properties`  
-
-```json
-{
-  "idx":"thermostat_beca",
-  "ip":"192.168.0.xxx",
-  "firmware":"x.xx",
-  "temperature":21.5,
-  "targetTemperature":23,
-  "deviceOn":true,
-  "schedulesMode":"off|auto",
-  "holdMode":"manual|scheduler|eco", // Special Mode for BAC-002 for HASS integration
-  "ecoMode":false,
-  "locked":false,
-  "state":"off|heating", //only_available, if hardware is modified
-  "floorTemperature":20, //only_BHT-002-GxLW
-  "fanMode":"auto|low|medium|high", //only_BAC-002-ALW
-  "systemMode":"cool|heat|fan_only", //only_BAC-002-ALW
-  "mode":"off|auto|heat", // BHT-002: combined Mode for better home assistant support.
-  "mode":"off|heat|cool|fan_only", // BAC-002-ALW
-  "action":"off|idle|heating|cooling|fan" // read only current action, idle only available if hardware is modified, cooling/fan only BAC-002
-}
-```
-
-#### 2. Schedules
-
-**MQTT:** Request actual schedules via message with empty payload to `<your_topic>/cmnd/things/thermostat/schedules`, answers are reported to to `<your_topic>/stat/things/thermostat/schedules`
-
-**WebThings:** State report can be requested by: `http://<device_ip>/things/thermostat/schedules`
-
-```json
-{
-  "w1h":"06:00",
-  "w1t":20,
-  "w2h":"08:00",
-  "w2t":15,
-  ...
-  "w6h":"22:00",
-  "w6t":15,
-  "a1h":"06:00",
-  ...
-  "a6t":15,
-  "u1h":"06:00",
-  ...
-  "u6t":15
-}
-```
-
-#### 3. Device Report
-
-**MQTT:** At start of device to let you know the topics and ip to `devices/thermostat`  
-
-**WebThings:** n.a.
-
-```json
-{
-  "url":"http://192.168.0.xxx/things/thermostat",
-  "ip":"192.168.0.xxx",
-  "topic":"thermostat_beca/things/thermostat"
-}
-```
-
-#### 4. Logs
-
-If logging is enabled (webgui/mqtt) you will see messages like:
+| PlatformIO environment | Purpose |
+|---|---|
+| `wthermostat` | Normal thermostat firmware, default |
+| `wthermostat-minimal` | Temporary network/update bridge |
+| `wthermostat-debug` | Development board only, UART logging |
 
 ```sh
-<your_topic>/tele/log trace: sending heartBeatCommand
-<your_topic>/tele/log trace: commandCharsToSerial: 55 aa 00 00 00 00
+# All variants, without uploading
+pio run -e wthermostat -e wthermostat-minimal -e wthermostat-debug
+
+# CI's packaged Clang check, with parser errors rejected
+python pio/check.py
+
+# Broad host Clang/Cppcheck and target GCC cross-checks
+python pio/analyze.py
 ```
 
-#### 5. Last Will & Testament
+The broad analysis needs host Clang/Cppcheck; optional Python analyzers are pinned in `requirements-analysis.txt` and should be installed separately. It records commands, tool versions and raw reports under `build_output/validation/static/`. Clang uses an asserted ESP8266 data model; real firmware compilation uses the pinned **Xtensa GCC 10.3** recommended for the selected core, while host tests have also been checked with GCC 16.2. Do not substitute the host compiler for the target compiler.
 
-**WebThings:** n.a.
-**MQTT:** The retained message at topic '<your_topic>/tele/LWT' is set to the value "Online" if the devices comes up and your MQTT-Broker is requested to set to "Offline" as last will when device goes down.
-
-### Modifying parameters via MQTT
-
-Send a json with changed parameters to `<your_topic>/cmnd/things/thermostat/properties`.  
-Send a json with changed schedules to `<your_topic>/cmnd/things/thermostat/schedules`.
-You also can change single values by sending the value to `<your_topic>/cmnd/things/thermostat/properties/parameterName`.
-
-Examples:
+Run the official HA validation in a separate Python 3.14 environment:
 
 ```sh
-# set device on
-mosquitto_pub -h mqtt -t home/test/cmnd/things/thermostat/properties/deviceOn  -m "true"
-
-# set device to heating
-mosquitto_pub -h mqtt -t home/test/cmnd/things/thermostat/properties/mode  -m "heat"
-
-# set target temperature
-mosquitto_pub -h mqtt -t home/test/cmnd/things/thermostat/properties/targetTemperature  -m "23.5"
-
-# set target temperature (json)
-mosquitto_pub -h mqtt -t home/test/cmnd/things/thermostat/properties -m '{"targetTemperature":23.00}'
-
-# set target temperature and mode (json)
-mosquitto_pub -h mqtt -t home/test/cmnd/things/thermostat/properties -m '{"targetTemperature":22.00,"mode":heat}'
-
-# set device to auto (target temperature controlled by MCU-Scheduler)
-mosquitto_pub -h mqtt -t home/test/cmnd/things/thermostat/properties/mode -m "auto"
-
-# just request properties
-mosquitto_pub -h mqtt  -t home/test/cmnd/things/thermostat/properties -n
-
-# request properties and show answer directly
-mosquitto_rr -h mqtt -t home/test/cmnd/things/thermostat/properties  -n -e home/test/stat/things/thermostat/properties
-
-
-# Change Schedules (here: weekday schedules)
-mosquitto_pub -h mqtt -t home/test/cmnd/things/thermostat/schedules -m \
-'{"w1h":"06:00","w1t":20.00,"w2h":"08:00","w2t":15.00,"w3h":"11:30","w3t":15.00,"w4h":"13:30","w4t":15.00,"w5h":"17:00","w5t":23.00,"w6h":"23:00","w6t":15.00}'
-
-# disable MQTT logging
-mosquitto_pub -h mqtt -t home/test/cmnd/things/logging/properties/logLevel -m "silent"
-
-# set to level trace (available: silent|fatal|error|warning|notice|trace|verbose)
-mosquitto_pub -h mqtt -t home/test/cmnd/things/logging/properties/logLevel -m "trace"
-
-# show logs
-mosquitto_sub -h mqtt -v -t "home/test/tele/log/#"
-
-# send MCU command by MQTT
-mosquitto_pub -t "home/test/cmnd/things/thermostat/mcucommand" -m "55 aa 00 1c 00 08 01 14 09 0c 10 30 0f 06"
-
+python3.14 -m venv /tmp/wthermostat-ha-tests
+/tmp/wthermostat-ha-tests/bin/python -m pip install -r requirements-homeassistant-test.txt
+/tmp/wthermostat-ha-tests/bin/python tests/homeassistant_schema.py
 ```
 
-### MQTT Explorer
+The release has **58 native tests**, run locally at 64/32 bit, plus two official HA tests and three firmware builds. The Ubuntu compatibility check also exercises fortified libc.
 
-For MQTT Troubleshooting i suggest MQTT Explorer, which can be found at <https://github.com/thomasnordquist/MQTT-Explorer>
+GitHub Actions runs native tests, firmware builds and the packaged static check, with HA schemas in a separate job. Tagged push builds can prepare a draft pre-release after both succeed; publishing and physical qualification are separate steps. Build artifacts are available from the [workflow runs](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml). The tagged workflow can also be dispatched explicitly. Local compilation is the validated starting point; old Gitpod instructions are not required.
 
-## How it works
+## Reporting a problem
 
-### Hardware and serial communication
+Include the release/tag, exact thermostat model and Wi-Fi module, selected controller profile, and whether the failure affects web, MQTT, MCU communication or recovery. Share redacted diagnostics and expected/observed behavior. Do not include Wi-Fi/MQTT passwords or unredacted configuration screenshots. Report problems in [this fork's issues](https://github.com/labodj/WThermostatBeca-labo/issues).
 
-The Hardware itself has two Microcontrollers:
-
-* **The MCU, the Main Controlling Unit.**
-  * The software on the MCU gets not upgraded with WThermostat, so no changes are possible here!
-  * It controls Temperature, Display, the Relay, Scheduling, has RTC, etc.
-  * Sonix SN8F57083 8 bit Microcontroller
-* **The ESP8266-based Tuya-WiFi-Module.**
-  * ___The Software of ESP can be flashed with this Open Source WThermostat___
-  * There is a serial connection between MCU and ESP. Via this connection we can control the MCU
-  * Only the WiFi-Versions of thermostats have the ESP-Module.
-
-Both devices are communication using a binary serial protocol, called "MCU protocol". See [Tuya Cloud Universal Serial Port Access Protocol_Tuya Smart_Docs.pdf](./docs/Tuya%20Cloud%20Universal%20Serial%20Port%20Access%20Protocol_Tuya%20Smart_Docs.pdf")
-
-Because ESP8266 runs with 3.3 Volt and Sonix MCU runs with 5.0 Volt the Serial-TTL-Level gets shifted with transistors.
-
-![HowItWorks](docs/images/how-it-works.png)
-
-### Can you add xxx as a feature
-
-I have been often asked if I can implement a specific feature.
-Often the answer is: Because all internal routines (reading temperature, controlling the relay, reading the buttons, controlling the display) are controlled by MCU, which still runs proprietary closed source software, the behavior cannot be changed!
-
-## Don't like it or it doesn't work
-
-Flash the original firmware (see installation). Write me a message with your exact model and which parameter was not correct. Maybe your MQTT-server received some unknown messages - this would be also helpful for me. Again: I have tested this only with model BHT-002-GBLW. If you have another device, don't expect that this is working directly.
-
-## Build this firmware from source and contributing
-
-For building from sources and coding i suggest VS Code and PlatformIO. You can also use Gitpod.
-
-### Visual Studio Code: Install and Prepare to build
-
-* Install [Visual Studio Code](]https://code.visualstudio.com/) and [PlatformIO](https://platformio.org/).
-* Type:
-
-```sh
-git clone https://github.com/fashberg/WThermostatBeca
-cd WThermostatBeca
-# download dependant library WAdapter
-git submodule init
-git submodule update
-```
-
-* Open the folder 'WThermostatBeca' in VS Code
-* Go to PlatformIO Alien Icon on the left
-* Open in Tree "wthermostat" and click General/Build
-  * Binary Firmware can be found in build_output/firmware/wthermostat-1.xx-fas.bin (or -debug or -minimal)
-
-All dependant arduino-libraries (DNSServer, EEPROM (for esp8266), ESP8266HTTPClient, ESP8266mDNS, AsyncWebServer, ESP8266WiFi, Hash, NTPClient, Time.) will be downloaded automatically (defined in platform.ini) and the necessary WAdapter library from <https://github.com/fashberg/WAdapter> (git submodule).
-
-You probably want to specify your own Port-Settings. Copy ``platformio_override.sample.ini`` to ``platformio_override.ini`` and define your stuff.
-
-#### Environments wthermostat / wthermostat-minimal / wthermostat-debug and bin.gz
-
-There are 3 environments:
-
-1. wthermostat: this is the default production environment.
-
-2. wthermostat-minimal: this is the minimal version. No MQTT and no Thermostat Support, meant for OTA Upgrading when standard is too small. After flashing minimal do an upgrade to normal.
-
-3. wthermostat-debug: this is the debug/development version.  DO NOT FLASH TO THERMOSTAT HARDWARE! There is debugging output to serial interface which will confuse Thermostat-MCU. Upload to USB-Connected development ESP8266 board (Node MCU or Wemos D1 Mini pro) and monitor the output in vscode/pio-monitor.
-
-bin vs bin.gz: You can directly upload a gzipped (compressed) firmware via OTA
-
-### Cloud Development using Gitpod
-
-You can open and compile this Project on Gitpod. You need a GitHub account, 50 hours are free per month - don't forget to stop the workspace.
-
-Just click
-
-[![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/fashberg/WThermostatBeca)
-
-The fist build starts automatically.
-You can download the firmware by right-clicking in the Project-Explorer the file located at build_output/firmware/wthermostat-1.xx-fas.bin and then choose Download.
-
-### Some commands
-
-* Build normal firmware:
-``platformio run -e wthermostat``
-* Build all firmwares:
-``platformio run``
-* Get latest version and dependant libraries.
-``git pull ; git pull --recurse-submodules``
-* Upgrade PlatformIO:
-``platformio upgrade --dev``
-* Upgrade Dependencies:
-``platformio pkg update ; platformio pkg install``
-* Build wthermostat:
-``pio run -e wthermostat``
-* Check/Lint wthermostat:
-``pio check -e wthermostat``
-* upload wthermostat via ip:
-``python pio/espupload.py -u <IpOfDevice> -f $SOURCE``
-
-### GitHub Actions, Pull-Requests
-
-After every push or pull-request the code is build automatically on github.
-
-Check out [/actions](/actions), you can also download the built-firmware for each commit at the bottom of the "Summary" at "Artifacts".
-
-Feel free the request a [PR](/pulls).
+Upstream lineage and retained notices: [WAdapter provenance](lib/WAdapter/UPSTREAM.md). The proprietary MCU and hardware remain outside this firmware's control; software tests do not replace physical qualification.
