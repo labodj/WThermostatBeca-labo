@@ -1,11 +1,11 @@
 """Contracts on HTML emitted by the actual firmware page builders."""
-from html.parser import HTMLParser
 import json
 import shutil
 import subprocess
 import unittest
+from html.parser import HTMLParser
 
-from render_ui import render_pages, raw_asset, ROOT
+from render_ui import ROOT, raw_asset, render_pages
 
 
 class Document(HTMLParser):
@@ -100,10 +100,9 @@ class UiRenderingTests(unittest.TestCase):
             fields = {attrs.get("name"): attrs for _, attrs, _ in Document(self.pages[route]).fields}
             for name in ("p", "mp"):
                 self.assertEqual("password", fields[name]["type"])
-                self.assertEqual("" if name == "p" else "___NOCHANGE___", fields[name]["value"])
-                if name == "p":
-                    self.assertEqual("64", fields[name]["maxlength"])
-                    self.assertIn("checked", fields["keepWifiPassword"])
+                self.assertEqual("", fields[name]["value"])
+                self.assertEqual("64", fields[name]["maxlength"])
+                self.assertIn("checked", fields["keepWifiPassword" if name == "p" else "keepMqttPassword"])
                 self.assertEqual(name, fields[name]["id"])
         self.assertRegex(self.pages["/thermostat-fine"], r"<option value='01' selected>")
 

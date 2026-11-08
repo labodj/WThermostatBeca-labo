@@ -28,6 +28,7 @@
 #include "WLed.h"
 #include "WSettings.h"
 #include "WWifiPassword.h"
+#include "WNetworkStrings.h"
 #include "WJsonParser.h"
 #include "WLog.h"
 #include "webserverHelper.h"
@@ -680,7 +681,7 @@ public:
 	}
 
 	const char* getIdx() {
-		return this->idx->c_str();
+		return networkStrings.get(0, this->idx->c_str());
 	}
 
 	const char* getSsid() {
@@ -877,15 +878,15 @@ public:
 	}
 
 	const char* getMqttTopic() {
-		return this->mqttBaseTopic->c_str();
+		return networkStrings.get(3, this->mqttBaseTopic->c_str());
 	}
 
 	const char* getMqttUser() {
-		return settings->getString(PROP_MQTTUSER);
+		return networkStrings.get(1, settings->getString(PROP_MQTTUSER));
 	}
 
 	const char* getMqttPassword() {
-		return settings->getString(PROP_MQTTPASSWORD);
+		return networkStrings.get(2, settings->getString(PROP_MQTTPASSWORD));
 	}
 
 	void addDevice(WDevice *device) {
@@ -1291,6 +1292,7 @@ private:
 	WProperty *supportingApFallback;
 	WProperty *supportingMqttSingleValues;
 	WProperty *mqttBaseTopic;
+    WNetworkStrings networkStrings;
     WProperty *staticIpEnabled;
     WProperty *staticIp;
     WProperty *subnetMask;
@@ -1642,7 +1644,7 @@ private:
 			printHttpCaption(page);
 			page->printf_P(HTTP_CONFIG_PAGE_BEGIN, ID_NETWORK);
 
-			page->printf_P(HTTP_TEXT_FIELD, PSTR("Hostname:"), "i", 16, htmlEscapedString(getIdx()).c_str());
+			page->printf_P(HTTP_TEXT_FIELD, PSTR("Hostname:"), "i", 32, htmlEscapedString(getIdx()).c_str());
 			page->printf_P(HTTP_TEXT_FIELD, PSTR("WiFi SSID (only 2.4G, name is case sensitive):"), "s", 32, htmlEscapedString(getSsid()).c_str());
 			page->printf_P(HTTP_TEXT_FIELD, PSTR("AP BSSID (optional, AA:BB:CC:DD:EE:FF):"), "bssid", 17, getBssid().c_str());
             page->print(F("<p>Leave empty for automatic AP selection. With AP fallback enabled, a recovery AP opens after 2 minutes offline or a persistent static-IP gateway failure. A BSSID lock also enables offline recovery even if AP fallback is disabled. The WLAN connection stays locked to the selected AP.</p>"));
@@ -1675,9 +1677,12 @@ private:
 			page->printf_P(HTTP_PAGE_CONFIGURATION_MQTT_BEGIN, isSupportingMqtt() ? "block" : "none");
 			page->printf_P(HTTP_TEXT_FIELD, PSTR("MQTT Server:"), "ms", 32, htmlEscapedString(getMqttServer()).c_str());
 			page->printf_P(HTTP_TEXT_FIELD, PSTR("MQTT Port:"), "mo", 5, htmlEscapedString(getMqttPort()).c_str());
-			page->printf_P(HTTP_TEXT_FIELD, PSTR("MQTT User:"), "mu", 16, htmlEscapedString(getMqttUser()).c_str());
-			page->printf_P(HTTP_PASSWORD_FIELD, PSTR("MQTT Password:"), "mp", "mp", 32, (strlen(getMqttPassword()) ? FORM_PW_NOCHANGE : ""), "mp");
-			page->printf_P(HTTP_TEXT_FIELD, PSTR("Topic, e.g.'therm/room':"), "mt", 32, htmlEscapedString(getMqttTopic()).c_str());
+			page->printf_P(HTTP_TEXT_FIELD, PSTR("MQTT User:"), "mu", 32, htmlEscapedString(getMqttUser()).c_str());
+			page->printf_P(HTTP_PASSWORD_FIELD, PSTR("MQTT Password:"), "mp", "mp", 64, "", "mp");
+            page->print(F("<input type='hidden' name='mqttPasswordMode' value='1'>"));
+            page->printf_P(HTTP_PAGE_CONFIGURATION_OPTION, "keepMqttPassword", (strlen(getMqttPassword()) ? HTTP_CHECKED : ""), "", PSTR("Keep saved MQTT password"));
+            page->print(F("<p>To change the password, uncheck Keep saved MQTT password and enter the new value.</p>"));
+			page->printf_P(HTTP_TEXT_FIELD, PSTR("Topic, e.g.'therm/room':"), "mt", 64, htmlEscapedString(getMqttTopic()).c_str());
 
 			page->printf_P(HTTP_PAGE_CONFIGURATION_OPTION, PSTR("mqhass"), (this->isSupportingMqttHASS() ? HTTP_CHECKED : ""),
 				"", HTTP_PAGE_CONFIIGURATION_OPTION_MQTTHASS);
@@ -1708,7 +1713,9 @@ private:
                 {"staticip",PROP_STATICIP},{"subnet",PROP_SUBNETMASK},{"gateway",PROP_GATEWAY},{"dns1",PROP_DNS1},{"dns2",PROP_DNS2}};
             for (const Field& field : fields) {
                 const String value = getValueOrEmpty(request, field.parameter);
-                if (!request->hasParam(field.parameter, true) || value.length() > (strcmp(field.parameter, "p") == 0 ? 64U : settings->getSetting(field.setting)->getLength())) {
+                const unsigned maximum = !strcmp(field.parameter, "p") || !strcmp(field.parameter, "mp") || !strcmp(field.parameter, "mt") ? 64U :
+                    !strcmp(field.parameter, "i") || !strcmp(field.parameter, "mu") ? 32U : settings->getSetting(field.setting)->getLength();
+                if (!request->hasParam(field.parameter, true) || value.length() > maximum || strlen(value.c_str()) != value.length()) {
                     request->send(400, CT_TEXT_PLAIN, "Missing or oversized network setting"); return;
                 }
             }
@@ -1739,6 +1746,14 @@ private:
                     }
                 }
             }
+            const bool keepMqttPassword = request->hasParam("mqttPasswordMode", true)
+                ? getValueOrEmpty(request, "keepMqttPassword") == "true" : getValueOrEmpty(request, "mp") == FORM_PW_NOCHANGE;
+            const String mqttPassword = keepMqttPassword ? String(getMqttPassword()) : getValueOrEmpty(request, "mp");
+            const String fullNetworkStrings[] = {getValueOrEmpty(request, "i"), getValueOrEmpty(request, "mu"), mqttPassword, topic};
+            if (!networkStrings.save(fullNetworkStrings)) {
+                request->send(500, CT_TEXT_PLAIN, "Failed to save network settings; existing values preserved"); return;
+            }
+            settings->writesEnabled = true;
             if (request->hasParam("bssid", true) && !saveBssid(address, bssidValue.length() != 0)) {
                 request->send(500, CT_TEXT_PLAIN, "Failed to save AP BSSID"); return;
             }
@@ -1757,8 +1772,10 @@ private:
 			String mqtt_port = getValueOrEmpty(request, "mo");
 			settings->setString(PROP_MQTTPORT, (mqtt_port != "" ? mqtt_port.c_str() : "1883"));
 			settings->setString(PROP_MQTTUSER, getValueOrEmpty(request, "mu").c_str());
-			settings->setString(PROP_MQTTPASSWORD, getValueOrEmpty(request, "mp").equals(FORM_PW_NOCHANGE) ? getMqttPassword() : getValueOrEmpty(request, "mp").c_str());
+			settings->setString(PROP_MQTTPASSWORD, mqttPassword.c_str());
 			this->mqttBaseTopic->setString(getValueOrEmpty(request, "mt").c_str());
+            const char* legacyStrings[] = {idx->c_str(), settings->getString(PROP_MQTTUSER), settings->getString(PROP_MQTTPASSWORD), mqttBaseTopic->c_str()};
+            networkStrings.loadAndMigrate(legacyStrings, nullptr);
 			byte nb1 = NETBITS1_RECOVERY_MIGRATED;
 			if (getValueOrEmpty(request, "mq").equals("true")) nb1 |= NETBITS1_MQTT;
 			if (getValueOrEmpty(request, "mqhass").equals("true")) nb1 |= NETBITS1_HASS;
@@ -1786,6 +1803,7 @@ private:
 
 	void handleHttpSaveDeviceConfiguration(AsyncWebServerRequest *request, WDevice *device) {
 		if (isWebServerRunning()) {
+            if (!settings->writesEnabled) { request->send(503, CT_TEXT_PLAIN, "Settings storage unavailable; network migration must succeed before saving"); return; }
 			wlog->notice(F("handleHttpSaveDeviceConfiguration "), device->getId());
 			device->saveConfigPage(request);
             if (request->isSent()) return;
@@ -2126,7 +2144,8 @@ private:
 				settingsOld->setString(PROP_DNS1, 15, "");
 				settingsOld->setString(PROP_DNS2, 15, "");
 			}
-			settingsOld->reallyReadSettings = false;
+            settingsOld->reallyReadSettings = settingsOld->existsSettingsApplication() ||
+                settingsOld->getApplicationSettingsVersion() == settingsOld->getApplicationSettingsCurrent() - 1;
 		} else {
 			settings->reallyReadSettings=true;
 		}
@@ -2143,6 +2162,14 @@ private:
 		settings->setString(PROP_MQTTUSER, 16, (settingsOld && settingsOld->existsSetting(PROP_MQTTUSER) ? settingsOld->getString(PROP_MQTTUSER) : ""));
 		settings->setString(PROP_MQTTPASSWORD, 32, (settingsOld && settingsOld->existsSetting(PROP_MQTTPASSWORD) ? settingsOld->getString(PROP_MQTTPASSWORD) : ""));
 		this->mqttBaseTopic = settings->setString(PROP_MQTTTOPIC, 32, (settingsOld && settingsOld->existsSetting(PROP_MQTTTOPIC) ? settingsOld->getString(PROP_MQTTTOPIC) : getIdx()));
+
+        const char* legacyStrings[] = {idx->c_str(), settings->getString(PROP_MQTTUSER), settings->getString(PROP_MQTTPASSWORD), mqttBaseTopic->c_str()};
+        const char* oldStrings[] = {settingsOld ? settingsOld->getString(PROP_IDX) : legacyStrings[0],
+            settingsOld ? settingsOld->getString(PROP_MQTTUSER) : legacyStrings[1],
+            settingsOld ? settingsOld->getString(PROP_MQTTPASSWORD) : legacyStrings[2],
+            settingsOld ? settingsOld->getString(PROP_MQTTTOPIC) : legacyStrings[3]};
+        settings->writesEnabled = networkStrings.loadAndMigrate(legacyStrings, oldStrings);
+        if (!settings->writesEnabled) wlog->error(F("Network migration could not preserve full values; settings writes disabled"));
 
 		// Split mqtt setting into bits - so we keep settings storage compatibility
 		if (this->netBits1->getByte() == 0xFF) this->netBits1->setByte(NETBITS1_MQTT | NETBITS1_HASS); // compatibility

@@ -13,7 +13,7 @@ const byte FLAG_OPTIONS_NETWORK_V2 = 0x65; //PR2  (added static IP)
 const byte FLAG_OPTIONS_NETWORK_V3 = 0x66; //1.23 (longer port)
 const byte FLAG_OPTIONS_NETWORK_CURRENT = FLAG_OPTIONS_NETWORK_V3;
 const int LEGACY_EEPROM_SIZE = 512;
-const int EEPROM_SIZE = 640;
+const int EEPROM_SIZE = 1024;
 int startAddressReadOffset = 2;
 int startAddressSaveOffset = 2;
 
@@ -38,6 +38,7 @@ const int APPLICATIONSETTINGS_UNKNOWN = 0;
 
 class WSettings {
 public:
+    bool writesEnabled = true;
 	WSettings(const WSettings&) = delete;
 	WSettings& operator=(const WSettings&) = delete;
 	/// @brief 
@@ -118,6 +119,7 @@ public:
     }
 
 	void save(WProperty* property) {
+        if (!writesEnabled) return;
 		WSettingItem* settingItem = firstSetting;
 		while (settingItem != nullptr) {
 			if (property == settingItem->value) {
@@ -131,6 +133,7 @@ public:
 	}
 
 	void save() {
+        if (!writesEnabled) return;
 		EEPROM.begin(EEPROM_SIZE);
 		WSettingItem* settingItem = firstSetting;
 		int address=0;

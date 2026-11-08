@@ -3,7 +3,7 @@ import re
 import unittest
 
 import test_regressions as native
-from test_regressions import ROOT, NETWORK, method
+from test_regressions import NETWORK, ROOT, method
 
 
 class BssidTests(unittest.TestCase):
@@ -28,6 +28,7 @@ class BssidTests(unittest.TestCase):
 #include "properties.h"
 #include "Stream.h"
 #include "lib/WAdapter/WAdapter/WStringProperty.h"
+#include "lib/WAdapter/WAdapter/WNetworkStrings.h"
 #include "lib/WAdapter/WAdapter/WSettings.h"
 #include "lib/WAdapter/WAdapter/WWifiPassword.h"
 #include <map>
@@ -57,6 +58,7 @@ struct Probe{
     WProperty*idx=nullptr,*ssid=nullptr,*mqttBaseTopic=nullptr;
     WProperty apFallback{"ap","AP",BOOLEAN};WProperty*supportingApFallback=&apFallback;
     String extendedWifiPassword;
+    WNetworkStrings networkStrings;
     uint8_t bssid[6]{};bool bssidLocked=false,restarted=false;
     Probe(bool minimal=false){settings->reallyReadSettings=false;
 '''
@@ -69,11 +71,10 @@ struct Probe{
         settings->setString(PROP_MQTTPORT,"1883");settings->setByte(PROP_NETBITS1,NETBITS1_MQTT|NETBITS1_HASS|NETBITS1_RECOVERY_MIGRATED);
     }
     const char*getSsid(){return ssid->c_str();}
-    const char*getMqttPassword(){return settings->getString(PROP_MQTTPASSWORD);}
     bool isWebServerRunning(){return true;}
     void restart(AsyncWebServerRequest*,const __FlashStringHelper*){restarted=true;}
 '''
-        for name in ['getPassword', 'migrateRecoverySettings', 'getBssid', 'parseBssid', 'connectWifi', 'loadBssid', 'saveBssid', 'isAuthenticationRequired', 'validStaticNetwork', 'handleHttpSave']:
+        for name in ['getIdx', 'getMqttUser', 'getMqttPassword', 'getMqttTopic', 'getPassword', 'migrateRecoverySettings', 'getBssid', 'parseBssid', 'connectWifi', 'loadBssid', 'saveBssid', 'isAuthenticationRequired', 'validStaticNetwork', 'handleHttpSave']:
             source += method(NETWORK, name) + '\n'
         source += r'''
 };
@@ -160,6 +161,22 @@ int main(){
     assert(!Probe::validStaticNetwork("192.168.1.0","255.255.255.0","192.168.1.1"));
     assert(!Probe::validStaticNetwork("192.168.1.255","255.255.255.0","192.168.1.1"));
     assert(!Probe::validStaticNetwork("192.168.1.1","255.255.255.0","192.168.1.1"));
+    // New forms express keep/change separately, so every literal password is usable.
+    for(const String& secret:{String("___NOCHANGE___"),String(std::string(64,'q')),String(" \"'&<password>\\")}){
+      auto save=request();save.fields["mqttPasswordMode"]="1";save.fields["mp"]=secret;
+      save.fields["i"]=String(std::string(32,'h'));save.fields["mu"]=String(std::string(32,'u'));save.fields["mt"]=String(std::string(64,'t'));
+      p.handleHttpSave(&save);assert(!save.status&&String(p.getMqttPassword())==secret);
+      assert(strlen(p.getIdx())==32&&strlen(p.getMqttUser())==32&&strlen(p.getMqttTopic())==64);
+      const char* fields[]={p.idx->c_str(),p.settings->getString(PROP_MQTTUSER),p.settings->getString(PROP_MQTTPASSWORD),p.mqttBaseTopic->c_str()};
+      assert(p.networkStrings.loadAndMigrate(fields,nullptr));assert(String(p.getMqttPassword())==secret);
+      save.fields["keepMqttPassword"]="true";save.fields["mp"]="";p.handleHttpSave(&save);assert(String(p.getMqttPassword())==secret);
+    }
+    auto tooLong=request();tooLong.fields["mp"]=String(std::string(65,'p'));before=EEPROM.bytes;
+    p.handleHttpSave(&tooLong);assert(tooLong.status==400&&EEPROM.bytes==before);
+    auto fail=request();fail.fields["mqttPasswordMode"]="1";fail.fields["mp"]=String(std::string(64,'z'));
+    const String oldPassword=p.getMqttPassword();before=EEPROM.bytes;EEPROM.commitOk=false;
+    p.handleHttpSave(&fail);assert(fail.status==500&&String(p.getMqttPassword())==oldPassword);
+    for(unsigned i=0;i<640;++i)assert(EEPROM.bytes[i]==before[i]);EEPROM.commitOk=true;
     puts("PASS BSSID parser, atomic HTTP validation, EEPROM preservation, minimal/normal and reconnect lock");
 }
 '''
