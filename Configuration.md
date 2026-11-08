@@ -46,6 +46,9 @@ See [Wi-Fi recovery](README.md#optional-bssid-lock-and-recovery) for timing, alt
 * Stay at page 'Network configuration'
 * Select checkbox 'Support MQTT', web page will extend
 * Fill out 'MQTT Server', 'MQTT User' (optional), 'MQTT password' (optional) and 'MQTT topic'
+* Hostnames and MQTT usernames support up to 32 bytes; MQTT passwords and base topics support up to 64 bytes. Existing values and legacy configuration offsets are preserved during upgrades.
+* Back up these values before downgrading: firmware without this extension cannot preserve values longer than its original field limits.
+* To change the MQTT password, uncheck **Keep saved MQTT password** and enter the new value. Leave it checked to preserve the saved password; no placeholder value is used as a password command.
 * If you are using Home Assistant then check "Support Autodiscovery for Home Assistant using MQTT".
 * For some other Smart Home Server (e.g. OpenHAB) optionally check "Send all values also as single values via MQTT" (then you don't have to parse JSON-Strings from summarized output).
 * Press 'Save Configuration' and wait for reboot of device.
@@ -102,26 +105,28 @@ In settings menu of MCU (option 4) you can switch between internal (IN), externa
 * Go to 'Configure clock'
 * Modify 'NTP server' for time synchronization
 * Modify 'Time zone' for time offset synchronisation depending on your location
-  * Set Timezone to values -13:30 .. 13:30 for fixed timezone
+  * Set Timezone to values -14:00 .. +14:00 for fixed timezone
   * Set Timezone to 99 for Daylight Saving
   * DST/STD: W,M,D,h,T
   W = week (0 = last week of month, 1..4 = first .. fourth)
   M = month (1..12)
   D = day of week (1..7 1 = sunday 7 = saturday)
   h = hour (0..23)
-  T = timezone (-810..810) (offset from UTC in MINUTES - 810min / 60min=13:30)
+  T = timezone offset from UTC in minutes, positive east of UTC and negative west of UTC. Use the region's actual standard and daylight offsets.
   * It's adopted from <https://tasmota.github.io/docs/Commands/#timestd> - but you don't need the Hemisphere Setting (first number), its calculated
 * Examples:
 
   | Region | Timezone | DST | STD | Explanation |
   | ---------- | ---------- | ----- | ----- | ---- |
   | UTC | 0 |  |  | Just UTC
-  | Pacific/Honolulu | 10 |  |  | Fixed 10 Hours Offset, no Daylight saving
-  | Asia/Beijing | -8 |  | |  Fixed -8 hours Offset
+  | Pacific/Honolulu | -10 |  |  | UTC-10:00 all year
+  | Asia/Shanghai (Beijing time) | +8 |  | | UTC+08:00 all year
   | Europe/Berlin | 99 |  0,3,0,2,120 | 0,10,0,3,60 | DST from last Sunday in March at 2 o'clock with 2h Offset from UTC and ends at last sunday in October at 3 o clock with 1 hour offset during standard time
-  | Europe/London | 99 |  0,3,0,2,60 | 0,10,0,3,0 | DST from last Sunday in March at 2 o'clock with 1h Offset from UTC and ends at last sunday in October at 3 o clock with no offset during standard time
-  | America/New_York | 99 | 2,3,0,2,-240 | 1,11,0,2,-300 | DST from 2nd Sunday in March at 2 o'clock with -4h Offset from UTC and ends at first sunday in November at 3 o clock with -5h offset during standard time
+  | Europe/London | 99 |  0,3,0,1,60 | 0,10,0,2,0 | DST starts on the last Sunday in March at 01:00 GMT and ends on the last Sunday in October at 02:00 BST
+  | America/New_York | 99 | 2,3,0,2,-240 | 1,11,0,2,-300 | DST starts on the second Sunday in March at 02:00 standard time and ends on the first Sunday in November at 02:00 daylight time
   | Australia/Sydney | 99 | 1,10,1,2,660 | 1,4,1,3,600 | DST from first Sunday in October at 2 o'clock with 11h Offset from UTC and ends at first sunday in April at 3 o clock with 10h offset during standard time
+
+  Sunday may be written as `0` in legacy examples or `1` in the documented day numbering. Rules contain five fields; omit Tasmota's hemisphere field. Check current regional rules against the [IANA time zone database](https://www.iana.org/time-zones). Updating firmware does not replace your saved time rules.
 
 ## 5. Troubleshooting
 

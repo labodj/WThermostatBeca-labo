@@ -2,7 +2,7 @@
 
 Local-control firmware for compatible **ESP8266 Beca/Moes/Qiumi Wi-Fi thermostats**, without a Tuya cloud dependency. This is the maintenance fork of [fashberg/WThermostatBeca](https://github.com/fashberg/WThermostatBeca), originally based on [klausahrenberg/WThermostatBeca](https://github.com/klausahrenberg/WThermostatBeca).
 
-**Current stable release: [v1.25.0-labo.5](https://github.com/labodj/WThermostatBeca-labo/releases/tag/v1.25.0-labo.5).** See GitHub Releases for changes, firmware downloads and upgrade notes.
+**Current stable release: [v1.26.0-labo](https://github.com/labodj/WThermostatBeca-labo/releases/tag/v1.26.0-labo).** See GitHub Releases for changes, firmware downloads and upgrade notes.
 
 [![Build](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml/badge.svg)](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml)
 [![Latest stable release](https://img.shields.io/github/v/release/labodj/WThermostatBeca-labo)](https://github.com/labodj/WThermostatBeca-labo/releases)
@@ -11,10 +11,10 @@ Local-control firmware for compatible **ESP8266 Beca/Moes/Qiumi Wi-Fi thermostat
 
 | File in the release | Purpose |
 |---|---|
-| **[`wthermostat-1.25.0-labo.5.bin`](https://github.com/labodj/WThermostatBeca-labo/releases/download/v1.25.0-labo.5/wthermostat-1.25.0-labo.5.bin)** | Normal firmware for a supported thermostat; use this image for an ordinary upgrade. |
-| `wthermostat-1.25.0-labo.5.bin.gz` | The same image compressed for OTA paths that support gzip; not for direct serial flashing. |
-| `wthermostat-minimal-1.25.0-labo.5.bin` / `.bin.gz` | Temporary OTA bridge when space is insufficient. It has **no thermostat control, MQTT or clock**; replace it with normal firmware afterwards. |
-| `wthermostat-symbols-1.25.0-labo.5.zip` | Matching normal ELF/MAP files for diagnosis, not a flash image. |
+| **[`wthermostat-1.26.0-labo.bin`](https://github.com/labodj/WThermostatBeca-labo/releases/download/v1.26.0-labo/wthermostat-1.26.0-labo.bin)** | Normal firmware for a supported thermostat; use this image for an ordinary upgrade. |
+| `wthermostat-1.26.0-labo.bin.gz` | The same image compressed for OTA paths that support gzip; not for direct serial flashing. |
+| `wthermostat-minimal-1.26.0-labo.bin` / `.bin.gz` | Temporary OTA bridge when space is insufficient. It has **no thermostat control, MQTT or clock**; replace it with normal firmware afterwards. |
+| `wthermostat-symbols-1.26.0-labo.zip` | Matching normal ELF/MAP files for diagnosis, not a flash image. |
 | `SHA256SUMS`, `BUILD-MANIFEST.json`, `SOURCE-MANIFEST.json` | Artifact checksums, build/image validation and source provenance. |
 
 The normal image is built for **ESP8266, 1 MiB flash, DOUT, 40 MHz flash / 80 MHz CPU**. Check the hardware before installation. Debug firmware is for development boards only: its UART log output conflicts with the thermostat MCU. It is not published as an installable thermostat image.
@@ -22,7 +22,7 @@ The normal image is built for **ESP8266, 1 MiB flash, DOUT, 40 MHz flash / 80 MH
 Verify downloaded files from their directory:
 
 ```sh
-sha256sum -c SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS
 ```
 
 ## Hardware compatibility
@@ -51,6 +51,7 @@ Historical hardware references: [installation](Installation.md), [first-flash gu
 - Optional Wi-Fi BSSID lock, preserved across reconnections, with fault-triggered recovery AP alongside the station connection.
 - Long Wi-Fi passwords and temporary local login recovery through the thermostat panel's Wi-Fi setup function.
 - Optional administrator authentication (enabled by default), POST/CSRF protections and per-request HTTP buffers.
+- Consistent automatic/manual, ECO and BAC state reporting, including power and mode changes without a new temperature reading.
 - Bounded schedule, UART, JSON and MQTT parsing, corrected resource ownership and numeric serialization.
 - Vendored WAdapter, pinned build dependencies, sanitizer-backed regression tests and repeatable static analysis.
 
@@ -79,7 +80,7 @@ Initial provisioning is accessible before a Wi-Fi configuration exists. An autom
 3. After reboot, reload the page and sign in with `admin` and the configured Wi-Fi password.
 4. Verify model, Wi-Fi/MQTT, time, schedules and Home Assistant availability on the physical device.
 
-A reset is not required for the legacy fashberg settings layouts covered by the tests: legacy field offsets, individual field sizes and version flags are preserved. The BSSID remains in its existing EEPROM tail slot; long Wi-Fi passwords use a checked extension after the original 512-byte area. AP fallback is enabled once on migration; your later choice is retained. Much older upstream layouts may follow their existing migration path; do not assume every setting from every historic firmware will survive.
+A reset is not required for the legacy fashberg settings layouts covered by the tests: legacy field offsets, individual field sizes and version flags are preserved. The BSSID remains in its existing EEPROM tail slot; long Wi-Fi passwords use a checked extension after the original 512-byte area. AP fallback is enabled once on migration; your later choice is retained. Version 1.26.0-labo also preserves the longer hostname, MQTT username/password and base topic from recognized older layouts using a checked extension starting at EEPROM offset 640. Existing application settings are read during supported migration. A failed extension save blocks settings writes instead of saving truncated values. This does not reconstruct values already lost by an earlier firmware or guarantee migration from an unknown layout.
 
 If the normal image cannot fit, the minimal image is a temporary bridge, not a usable thermostat firmware. Complete the second upgrade to normal firmware. Compressed OTA is available where the update path supports it. Local size calculations and valid image checksums are not a physical OTA test.
 
@@ -97,7 +98,9 @@ If the normal image cannot fit, the minimal image is a temporary bridge, not a u
 
 Since v1.25.0-labo.5, the firmware supports Wi-Fi passphrases of **8–63 bytes**, including spaces and punctuation, or a **64-digit hexadecimal PSK**. HTTP Digest explicitly declares UTF-8 for non-ASCII passwords; the access point must support the same password bytes. Empty passwords are supported for open Wi-Fi with administrator login disabled. Existing credentials are preserved. Uncheck **Keep saved WiFi password** to replace a password, or leave it checked when changing other network settings. Passwords are not included in the configuration page source.
 
-Long passwords use a checked extension of the existing EEPROM area. All legacy configuration fields and BSSID addresses stay in place. Downgrading to an older firmware cannot retain support for passwords longer than 32 bytes: change to a supported password before downgrading.
+Long Wi-Fi passwords use a checked extension of the existing EEPROM area. All legacy configuration fields and BSSID addresses stay in place. Hostnames and MQTT usernames now support **32 bytes**; MQTT passwords and base topics support **64 bytes**. MQTT has its own **Keep saved MQTT password** checkbox: uncheck it to change or clear the saved value, including setting the literal password `___NOCHANGE___`.
+
+Back up network values before downgrading. Firmware without these extensions cannot preserve long values; change them to values supported by the destination firmware first. The original limits were 16 bytes for hostname/MQTT username and 32 bytes for Wi-Fi password/MQTT password/base topic.
 
 **Forgotten administrator password (full firmware, v1.25.0-labo.5 and later):** use the thermostat's physical Wi-Fi setup gesture. On supported Beca controllers, hold Down while the thermostat is off, or Power + Down while it is on, until Wi-Fi setup is requested (typically around eight seconds; the gesture depends on the model). Join `WThermostat-<chip-id>` with AP key `12345678` and open `http://192.168.4.1`. For five minutes, requests received on that AP can change network/login settings without the forgotten administrator password. Disable **Require administrator login** while keeping the saved Wi-Fi password, or enter replacement Wi-Fi credentials, then save. Other settings are retained. The normal LAN interface does not gain this bypass; automatic fallback and MQTT AP commands do not enable it. Anyone nearby who knows the AP key can use this physically activated window. Minimal firmware has no thermostat-button recovery because it omits the MCU integration.
 
@@ -106,7 +109,7 @@ HTTP Digest authenticates requests but **does not encrypt HTTP traffic**. Use a 
 The command-line OTA uploader prompts for the password; it does not take a password argument. Replace the documentation address `192.0.2.10` with the device address:
 
 ```sh
-python pio/espupload.py --host 192.0.2.10 --file wthermostat-1.25.0-labo.5.bin
+python pio/espupload.py --host 192.0.2.10 --file wthermostat-1.26.0-labo.bin
 ```
 
 For unattended use, supply `WTHERMOSTAT_PASSWORD` through an appropriate protected environment. No device address is configured as a default upload destination.
@@ -176,7 +179,7 @@ mosquitto_pub -h mqtt.example.test -t home/room/cmnd/things/thermostat/propertie
   -m '{"targetTemperature":22.0,"mode":"heat"}'
 ```
 
-Common state properties include `temperature`, `targetTemperature`, `deviceOn`, `schedulesMode`, `ecoMode`, `locked`, `mode`, `preset` and `action`. BAC additionally exposes `systemMode` and `fanMode`; floor temperature depends on BHT configuration. The legacy scheduling alias `holdState` is MQTT-only. Use the selected device's WebThings description for its actual properties and allowed values. `action` is read-only.
+Common state properties include `temperature`, `targetTemperature`, `deviceOn`, `schedulesMode`, `ecoMode`, `locked`, `mode`, `preset` and `action`. BAC additionally exposes `systemMode` and `fanMode`; floor temperature depends on BHT configuration. The legacy scheduling alias `holdState` is MQTT-only. Use the selected device's WebThings description for its actual properties and allowed values. `action` is read-only. While ECO is enabled, `targetTemperature` is also read-only: the ECO setpoint is reported and the previous manual setpoint is retained. Internally refreshed targets do not switch the MCU out of automatic mode. A real target-temperature command outside ECO switches automatic scheduling to manual and sends both the mode and temperature commands.
 
 Schedules use six periods in each of three day groups (`w`, `a`, `u`); group interpretation follows the configured schedule day offset. A partial update has the form:
 
@@ -184,7 +187,7 @@ Schedules use six periods in each of three day groups (`w`, `a`, `u`); group int
 {"w1h":"06:00","w1t":20.0,"w2h":"08:00","w2t":17.0}
 ```
 
-Time strings must be valid `HH:MM`, entries must remain ordered, and temperatures must satisfy configured bounds/precision. Invalid updates are rejected before being applied.
+Time strings must be valid `HH:MM`, entries must remain ordered, and temperatures must satisfy configured bounds/precision. The sixth/final period may use `00:00` to mean the end of the schedule day; it becomes active at midnight and carries into the next day until that day's first period. Other reversed periods are rejected before being applied.
 
 Read-only HTTP endpoints include:
 
@@ -208,7 +211,7 @@ Property writes use HTTP Digest PUT on the property endpoints. WebThings gateway
 
 ![Schedules](docs/images/interface/schedules.png)
 
-These screenshots show earlier labo builds. Version 1.25.0-labo.5 adds the **Keep saved WiFi password** checkbox to Network Configuration.
+These screenshots show earlier labo builds. The current Network Configuration page also has **Keep saved WiFi password** and **Keep saved MQTT password** checkboxes.
 
 ## Build and test
 
@@ -224,7 +227,7 @@ python -m unittest discover -s tests -v
 pio run -e wthermostat
 ```
 
-The normal image is written to `build_output/firmware/wthermostat-1.25.0-labo.5.bin`; matching ELF/MAP files are in `build_output/map/`. An optional `platformio_override.ini` can change local settings; copying the sample also overrides `appversion`, so remove or edit that sample value if you want the release filename.
+The normal image is written to `build_output/firmware/wthermostat-1.26.0-labo.bin`; matching ELF/MAP files are in `build_output/map/`. An optional `platformio_override.ini` can change local settings; copying the sample also overrides `appversion`, so remove or edit that sample value if you want the release filename.
 
 | PlatformIO environment | Purpose |
 |---|---|
@@ -253,7 +256,7 @@ python3.14 -m venv /tmp/wthermostat-ha-tests
 /tmp/wthermostat-ha-tests/bin/python tests/homeassistant_schema.py
 ```
 
-The release has **58 native tests**, run locally at 64/32 bit, plus two official HA tests and three firmware builds. The Ubuntu compatibility check also exercises fortified libc.
+The release has **68 native tests**, run locally at 64/32 bit with address/undefined-behavior sanitizers, plus two official HA tests and three firmware builds. The regressions cover UART command ordering, scheduling across midnight, ECO/BAC state, legacy configuration/identity migration, credential edge cases and documented timezone transitions.
 
 GitHub Actions runs native tests, firmware builds and the packaged static check, with HA schemas in a separate job. Tagged push builds can prepare a draft pre-release after both succeed; publishing and physical qualification are separate steps. Build artifacts are available from the [workflow runs](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml). The tagged workflow can also be dispatched explicitly. Local compilation is the validated starting point; old Gitpod instructions are not required.
 
