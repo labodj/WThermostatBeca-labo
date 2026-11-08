@@ -319,7 +319,6 @@ public:
 		this->stateNotifyInterval=60000;
 		this->onConfigurationRequest=nullptr;
 		this->onPowerButtonOn=nullptr;
-		oldActualTemperature = oldTargetTemperature = 0;
 		network->log()->trace(F("Beca start (%d)"), ESP.getMaxFreeBlockSize());
 		startMcuInitialize();
 		/* properties */
@@ -1125,7 +1124,7 @@ public:
                 const unsigned index = day * 18 + period * 3;
                 if (schedules[index] > 59 || schedules[index + 1] > 23) return false;
                 const int minute = schedules[index + 1] * 60 + schedules[index];
-                if (minute < previous) return false;
+                if (minute < previous && !(period == 5 && minute == 0)) return false;
                 previous = minute;
             }
         }
@@ -1302,10 +1301,12 @@ public:
     			unsigned char deviceOnCommand[] = { 0x55, 0xAA, 0x00, 0x06, 0x00, 0x05,
     												0x66, 0x04, 0x00, 0x01, dt};
     			commandCharsToSerial(11, deviceOnCommand);
-				updateCurrentSchedulePeriod();
-				updateTargetTemperature();
     		}
     	}
+        if (systemMode != nullptr) {
+            updateCurrentSchedulePeriod();
+            updateTargetTemperature();
+        }
     }
 
 	bool isMcuInitialized(){
@@ -1615,7 +1616,6 @@ private:
     int lastMcuAvailability = -1;
 
 
-	double oldActualTemperature, oldTargetTemperature;
 
     int getIndex(unsigned char c) {
 	const unsigned char HEX_DIGITS[] = { '0', '1', '2', '3', '4', '5', '6', '7', '8',
@@ -1990,6 +1990,7 @@ private:
        		commandCharsToSerial(11, deviceOnCommand);
        		//notifyState();
      	}
+        updateRelaySimulation();
     }
 	/* gets called:
 	 * If MCU sends changed manualTemperature
@@ -1997,6 +1998,7 @@ private:
 	 * If Scheduler Period Changed
 	 */
     void updateTargetTemperature() {
+		targetTemperature->setReadOnly(ecoMode->getBoolean());
 		if (ecoMode->getBoolean()) {
 			targetTemperature->setSuppressOnChange();
 			if (getThermostatModel() == MODEL_BAC_002_ALW &&
@@ -2015,7 +2017,9 @@ private:
 			targetTemperature->setDouble(temp);
 			updateRelaySimulation();
 		} else {
+			targetTemperature->setSuppressOnChange();
 			targetTemperature->setDouble(targetTemperatureManualMode);
+			updateRelaySimulation();
 		}
 	}
 
@@ -2032,17 +2036,12 @@ private:
     			startAddr = (weekDay == 0 ? 36 : (weekDay == 6 ? 18 : 0));
     			period = 5;
     		} else {
-    			//check the schedules in same day
+                // A terminal 00:00 belongs to the end of the schedule day.
     			for (int i = 1; i < 6; i++) {
-    				if (i < 5) {
-    					if (wClock->isTimeBetween(schedules[startAddr + i * 3 + 1], schedules[startAddr + i * 3 + 0],
-    							                  schedules[startAddr + (i + 1) * 3 + 1], schedules[startAddr + (i + 1) * 3 + 0])) {
-    						period = i;
-    						break;
-    					}
-    				} else if (wClock->isTimeLaterThan(schedules[startAddr + 5 * 3 + 1], schedules[startAddr + 5 * 3 + 0])) {
-    					period = 5;
-    				}
+                    const int scheduleAddress = startAddr + i * 3;
+                    if (i == 5 && schedules[scheduleAddress] == 0 && schedules[scheduleAddress + 1] == 0 &&
+                        (schedules[scheduleAddress - 3] != 0 || schedules[scheduleAddress - 2] != 0)) break;
+                    if (wClock->isTimeLaterThan(schedules[scheduleAddress + 1], schedules[scheduleAddress])) period = i;
     			}
     		}
 
@@ -2065,18 +2064,20 @@ private:
     }
 
     void onChangeTargetTemperature(WProperty* property) {
+		if (ecoMode->getBoolean()) { updateTargetTemperature(); return; }
 		network->log()->trace(PSTR("Got new targetTemperature"));
 		bool force=false;
 		if (schedulesMode->equalsString(SCHEDULES_MODE_AUTO)){
 			network->log()->trace(PSTR("Got new targetTemperature: Switching from Schdule to Manual"));
-			schedulesMode->setSuppressOnChange();
+			// The mode callback refreshes the target, so retain the requested value first.
+			targetTemperatureManualMode = this->targetTemperature->getDouble();
 			schedulesMode->setString(SCHEDULES_MODE_OFF);
 			force=true;
 		}
 		if (schedulesMode->equalsString(SCHEDULES_MODE_OFF)){
 			// only set targetTemperatureManualMode and targetTemperatureManualModeToMcu() if current mode is Manual
 			if (force || !WProperty::isEqual(targetTemperatureManualMode, this->targetTemperature->getDouble(), 0.01)) {
-				targetTemperatureManualMode = this->targetTemperature->getDouble();
+				if (!force) targetTemperatureManualMode = this->targetTemperature->getDouble();
 				network->log()->trace((String(PSTR("onChangeTargetTemperature, temp: "))+String(targetTemperatureManualMode)).c_str());
 				targetTemperatureManualModeToMcu();
 				schedulesMode->setString(SCHEDULES_MODE_OFF);
@@ -2106,37 +2107,33 @@ private:
 
 	void updateRelaySimulation() {
 		if (!actualTemperature || !targetTemperature || !deadzoneTemp) return;
+        if (!this->deviceOn->getBoolean()) {
+            if (!isSupportingHeatingRelay() && !isSupportingCoolingRelay()) this->state->setString(STATE_OFF);
+            updateModeAndAction();
+            return;
+        }
 		double actual=actualTemperature->getDouble();
 		double target=targetTemperature->getDouble();
 		int dz=deadzoneTemp->getByte();
 		bool isHeating=false;
 		bool isCooling=false;
-		if (this->deviceOn->getBoolean()){
-			if (getThermostatModel() == MODEL_BHT_002_GBLW){
-				isHeating=true;
-			} else if (getThermostatModel() == MODEL_BAC_002_ALW){
-				if (!systemMode) return;
-				if (this->systemMode->equalsString(SYSTEM_MODE_HEAT)){
-					isHeating=true;
-				} else if (this->systemMode->equalsString(SYSTEM_MODE_COOL) || this->systemMode->equalsString(SYSTEM_MODE_FAN)){
-					isCooling=true;
-				}
-			}
-		}
+        if (getThermostatModel() == MODEL_BHT_002_GBLW){
+            isHeating=true;
+        } else if (getThermostatModel() == MODEL_BAC_002_ALW){
+            if (!systemMode) return;
+            if (this->systemMode->equalsString(SYSTEM_MODE_HEAT)){
+                isHeating=true;
+            } else if (this->systemMode->equalsString(SYSTEM_MODE_COOL) || this->systemMode->equalsString(SYSTEM_MODE_FAN)){
+                isCooling=true;
+            }
+        }
 		if (!isSupportingHeatingRelay() && isHeating){
-			/*
-			network->log()->notice(F("RelaySimulation: Check Heating %s -> %s / %s -> %s (%s)"),
-			((String)oldActualTemperature).c_str(), ((String)actual).c_str(), 
-			((String)oldTargetTemperature).c_str(), ((String)target).c_str(), ((String)(target-dz)).c_str());
-			*/
 			if (actual>=target){
 				network->log()->notice(F("RelaySimulation: State OFF"));
 				this->state->setString(STATE_OFF);
-				updateModeAndAction();
-			} else if ((actual != oldActualTemperature || target!=oldTargetTemperature) && actual <= (target - dz)){
+			} else if (actual <= (target - dz)){
 				this->state->setString(STATE_HEATING);
 				network->log()->notice(F("RelaySimulation: State HEATING"));
-				updateModeAndAction();
 			} else {
 				network->log()->notice(F("RelaySimulation: NOOP"));
 			}
@@ -2145,8 +2142,7 @@ private:
 			if (actual<=target){
 				network->log()->notice(F("RelaySimulation: State OFF"));
 				this->state->setString(STATE_OFF);
-				updateModeAndAction();
-			} else if ((actual != oldActualTemperature || target != oldTargetTemperature) && actual >= (target + dz)){
+			} else if (actual >= (target + dz) || this->state->equalsString(STATE_COOLING) || this->state->equalsString(STATE_FAN)){
 		
 				if (this->systemMode->equalsString(SYSTEM_MODE_FAN)){
 					this->state->setString(STATE_FAN);
@@ -2155,11 +2151,9 @@ private:
 					this->state->setString(STATE_COOLING);
 					network->log()->notice(F("RelaySimulation: State COOLING"));
 				}
-				updateModeAndAction();
 			}
 		}
-		oldActualTemperature=actual;
-		oldTargetTemperature=target;
+        updateModeAndAction();
 	}
 
     void schedulesModeToMcu(WProperty* property) {
@@ -2227,47 +2221,51 @@ private:
        		unsigned char deviceOnCommand[] = { 0x55, 0xAA, 0x00, 0x06, 0x00, 0x05,
        		                                    0x05, 0x01, 0x00, 0x01, dt};
        		commandCharsToSerial(11, deviceOnCommand);
-			holdFromScheduler();
        	}
+        holdFromScheduler();
+        updateTargetTemperature();
     }
  	void modeToMcu(WProperty* property) {
-		network->log()->trace(F("modeToMcu %s"), property->c_str());
+        // Power callbacks can refresh the derived mode before this command finishes.
+        const String requestedMode(property->c_str());
+		network->log()->trace(F("modeToMcu %s"), requestedMode.c_str());
 		if (getThermostatModel() == MODEL_BHT_002_GBLW) {
-			if (this->mode->equalsString(MODE_OFF)){
+			if (requestedMode == MODE_OFF){
 				this->deviceOn->setBoolean(false);
 				this->schedulesMode->setString(SCHEDULES_MODE_OFF);
 			} else {
 				this->deviceOn->setBoolean(true);
-				if (this->mode->equalsString(MODE_AUTO)){
+				if (requestedMode == MODE_AUTO){
 					this->schedulesMode->setString(SCHEDULES_MODE_AUTO);
-				} else if (this->mode->equalsString(MODE_HEAT)){
+				} else if (requestedMode == MODE_HEAT){
 					this->schedulesMode->setString(SCHEDULES_MODE_OFF);
 				} else {
-					network->log()->warning(F("modeToMcu unknown mode %s"), property->c_str());
+					network->log()->warning(F("modeToMcu unknown mode %s"), requestedMode.c_str());
 				}
 			}
 		} else if (getThermostatModel() == MODEL_BAC_002_ALW){		
-			if (this->mode->equalsString(MODE_OFF)){
+			if (requestedMode == MODE_OFF){
 				this->deviceOn->setBoolean(false);
 			} else {
 				this->deviceOn->setBoolean(true);
-				if (this->mode->equalsString(MODE_AUTO)){
+				if (requestedMode == MODE_AUTO){
 					// not really supported
 					this->schedulesMode->setString(SCHEDULES_MODE_AUTO);
 					this->holdState->setString(HOLD_STATE_SCHEDULER);
 					this->fanMode->setString(FAN_MODE_AUTO);
 					this->systemMode->setString(SYSTEM_MODE_COOL);
-				} else if (this->mode->equalsString(MODE_HEAT)){
+				} else if (requestedMode == MODE_HEAT){
 					this->systemMode->setString(SYSTEM_MODE_HEAT);
-				} else if (this->mode->equalsString(MODE_COOL)){
+				} else if (requestedMode == MODE_COOL){
 					this->systemMode->setString(SYSTEM_MODE_COOL);
-				} else if (this->mode->equalsString(MODE_FAN)){
+				} else if (requestedMode == MODE_FAN){
 					this->systemMode->setString(SYSTEM_MODE_FAN);
 				} else {
-					network->log()->warning(F("modeToMcu unknown mode %s"), property->c_str());
+					network->log()->warning(F("modeToMcu unknown mode %s"), requestedMode.c_str());
 				}
 			}
 		}
+        updateRelaySimulation();
 	}
 
 
@@ -2291,6 +2289,8 @@ private:
 	}
 
     void updateModeAndAction() {
+        // Derived status must not send mode commands back to the MCU.
+        this->mode->setSuppressOnChange();
 		if (!this->deviceOn->getBoolean()){
 			this->mode->setString(MODE_OFF);
 		} else {
@@ -2313,6 +2313,7 @@ private:
 			}
 		}
 
+        this->mode->setSuppressOnChange(false);
 		// mode to action
 		if (this->mode->equalsString(MODE_OFF)) this->action->setString(ACTION_OFF);
 		else if (getThermostatModel() == MODEL_BAC_002_ALW) {
