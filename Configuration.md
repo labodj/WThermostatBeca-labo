@@ -24,7 +24,7 @@ If you forget the administrator password, use the **Wi-Fi setup function on the 
 
 See [Wi-Fi recovery](README.md#optional-bssid-lock-and-recovery) for timing, alternate automatic AP addresses and limitations, and [administration](README.md#administration-and-security) for password storage and downgrade compatibility.
 
-### Saving settings in the unreleased source
+### Saving settings in 1.27.0
 
 Network fields, BSSID and long passwords are written in one checked EEPROM commit; device settings are also batched. A storage error is shown instead of a success page or scheduled reboot, and the previous in-memory settings are restored. Autosaves are then blocked until a complete Network Configuration save succeeds. Keep power connected during saves: a single-sector EEPROM cannot preserve the old flash contents through every power interruption or physical write failure. If a save fails, check the device and retain your settings before rebooting.
 

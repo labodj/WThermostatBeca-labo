@@ -58,8 +58,7 @@ jobs:
         run: python pio/check.py
       - name: Package firmware and hashes
         run: |
-          gzip -n -9 -k build_output/firmware/*.bin
-          sha256sum build_output/firmware/*.bin* > build_output/SHA256SUMS
+          python pio/package.py "$RELEASE_VERSION"
           pio pkg list > build_output/dependencies.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -82,4 +81,4 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-        run: gh release create "$GITHUB_REF_NAME" build_output/firmware/*.bin.gz build_output/SHA256SUMS --draft --prerelease --verify-tag --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" build_output/release/* --draft --verify-tag --generate-notes

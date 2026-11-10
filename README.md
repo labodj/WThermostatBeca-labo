@@ -2,14 +2,14 @@
 
 Local-control firmware for compatible **ESP8266 Beca/Moes/Qiumi Wi-Fi thermostats**, without a Tuya cloud dependency. This is the maintenance fork of [fashberg/WThermostatBeca](https://github.com/fashberg/WThermostatBeca), originally based on [klausahrenberg/WThermostatBeca](https://github.com/klausahrenberg/WThermostatBeca).
 
-**Current stable release: [v1.26.0-labo](https://github.com/labodj/WThermostatBeca-labo/releases/tag/v1.26.0-labo).** See GitHub Releases for changes, firmware downloads and upgrade notes.
+**Current stable release: [v1.27.0](https://github.com/labodj/WThermostatBeca-labo/releases/tag/v1.27.0).** See GitHub Releases for changes, firmware downloads and upgrade notes.
 
 [![Build](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml/badge.svg)](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml)
 [![Latest stable release](https://img.shields.io/github/v/release/labodj/WThermostatBeca-labo)](https://github.com/labodj/WThermostatBeca-labo/releases)
 
-## Unreleased changes
+## What changed in 1.27.0
 
-The working source includes fixes beyond the stable release linked above:
+This release improves web transport, authentication and configuration persistence:
 
 - Digest challenges are tied to this boot, expire after five minutes, and reject reused counters and mismatched request targets. A small replay window allows parallel browser requests and repeated callbacks within one upload.
 - Network forms save legacy fields, BSSID and long credentials in one checked EEPROM commit. Device forms also batch their writes. Failed commits return an error without scheduling a reboot and restore the previous in-memory settings.
@@ -19,7 +19,7 @@ The working source includes fixes beyond the stable release linked above:
 - Flash-format logging avoids an extra 256-byte stack buffer; unused network timers are removed.
 - CSS and JavaScript are served directly from flash. HTML response creation checks its actual buffer size and memory reserve before allocation, and handles unavailable response objects.
 - HTML pages also use checked formatting and writes: an incomplete form is discarded and returns HTTP 503. HTML pages use bounded 256-byte blocks and release consumed blocks while sending, avoiding large contiguous allocations and copy-before-free growth on fragmented heaps. Live WebLog queues are limited to four messages; messages are skipped while memory is low or a browser cannot keep up. MQTT logging remains independent.
-- HTTP header parsing checks memory before allocating header storage. HTML pages release validated request headers and preserve RAM for TCP, preventing the low-memory crash reproduced with WebLog and concurrent page loads. When several large transfers exceed available memory, the device can return HTTP 503; retry after the other transfer finishes.
+- HTTP header parsing checks memory before allocating header storage. HTML pages release validated request headers and preserve RAM for TCP, preventing the low-memory crash reproduced with WebLog and concurrent page loads. When several large transfers exceed available memory, the device can return HTTP 503; retry after the other transfer finishes. A three-device test with Info, WebLog and one configuration tab found one initial cold-cache Wi-Fi page returning 503 on the device using Verbose logging; the retry and four later cold reloads passed without a reboot. This transient remains a known limitation, not a claimed fix.
 - POST forms include their protection token in the server-generated HTML, so saving does not depend on JavaScript loading. Flash-backed assets use a 1 KiB admission reserve for response objects and headers; their checked transport buffers can wait for memory to become available.
 - HTTP responses retain pending bytes until TCP accepts them. The server dependency is pinned to the [upstream premature-close fix](https://github.com/ESP32Async/ESPAsyncWebServer/commit/c764160d875a7a97a2d9463edff90b8a705a89df); regression tests force partial writes, including one byte at a time. The global WebLog handler is registered without transferring its ownership to the server. The pinned web server fork explicitly copies temporary HTTP and handshake buffers into ESP8266 TCP storage, keeping retransmissions valid after the response releases its buffers. Empty TCP outputs remain pollable, so a temporary send-buffer allocation failure can recover instead of waiting for a nonexistent ACK.
 
@@ -27,16 +27,16 @@ ESPAsyncWebServer is pinned to the [labodj integration branch](https://github.co
 
 The common JavaScript is 504 bytes (previously 1,363): protection tokens come from the server, and unused helpers have been removed. Transport fixes live in versioned library forks with regression tests; experimental TCP counters and snapshots are removed. Table headings and buttons use explicit semantics, and restart status pages offer manual navigation instead of a timed refresh.
 
-Stored offsets, device IDs, discovery IDs and existing configuration choices are retained. These changes are not included in the published stable binaries yet. After a reported write failure, autosaves are blocked until a complete Network Configuration save succeeds. A single-sector EEPROM commit is **not power-loss atomic**: keep power connected during saves, and investigate a storage error before rebooting or retrying. Tests simulate write failures; they cannot prove physical flash reliability.
+Stored offsets, device IDs, discovery IDs and existing configuration choices are retained. After a reported write failure, autosaves are blocked until a complete Network Configuration save succeeds. A single-sector EEPROM commit is **not power-loss atomic**: keep power connected during saves, and investigate a storage error before rebooting or retrying. Tests simulate write failures; they cannot prove physical flash reliability.
 
 ## Get the firmware
 
 | File in the release | Purpose |
 |---|---|
-| **[`wthermostat-1.26.0-labo.bin`](https://github.com/labodj/WThermostatBeca-labo/releases/download/v1.26.0-labo/wthermostat-1.26.0-labo.bin)** | Normal firmware for a supported thermostat; use this image for an ordinary upgrade. |
-| `wthermostat-1.26.0-labo.bin.gz` | The same image compressed for OTA paths that support gzip; not for direct serial flashing. |
-| `wthermostat-minimal-1.26.0-labo.bin` / `.bin.gz` | Temporary OTA bridge when space is insufficient. It has **no thermostat control, MQTT or clock**; replace it with normal firmware afterwards. |
-| `wthermostat-symbols-1.26.0-labo.zip` | Matching normal ELF/MAP files for diagnosis, not a flash image. |
+| **[`wthermostat-1.27.0.bin`](https://github.com/labodj/WThermostatBeca-labo/releases/download/v1.27.0/wthermostat-1.27.0.bin)** | Normal firmware for a supported thermostat; use this image for an ordinary upgrade. |
+| `wthermostat-1.27.0.bin.gz` | The same image compressed for OTA paths that support gzip; not for direct serial flashing. |
+| `wthermostat-minimal-1.27.0.bin` / `.bin.gz` | Temporary OTA bridge when space is insufficient. It has **no thermostat control, MQTT or clock**; replace it with normal firmware afterwards. |
+| `wthermostat-symbols-1.27.0.zip` | Matching normal ELF/MAP files for diagnosis, not a flash image. |
 | `SHA256SUMS`, `BUILD-MANIFEST.json`, `SOURCE-MANIFEST.json` | Artifact checksums, build/image validation and source provenance. |
 
 The normal image is built for **ESP8266, 1 MiB flash, DOUT, 40 MHz flash / 80 MHz CPU**. Check the hardware before installation. Debug firmware is for development boards only: its UART log output conflicts with the thermostat MCU. It is not published as an installable thermostat image.
@@ -131,7 +131,7 @@ HTTP Digest authenticates requests but **does not encrypt HTTP traffic**. Use a 
 The command-line OTA uploader prompts for the password; it does not take a password argument. Replace the documentation address `192.0.2.10` with the device address:
 
 ```sh
-python pio/espupload.py --host 192.0.2.10 --file wthermostat-1.26.0-labo.bin
+python pio/espupload.py --host 192.0.2.10 --file wthermostat-1.27.0.bin
 ```
 
 For unattended use, supply `WTHERMOSTAT_PASSWORD` through an appropriate protected environment. No device address is configured as a default upload destination.
@@ -243,7 +243,7 @@ The ESP8266 TCP dependency is the minimal [labodj/ESPAsyncTCP maintenance fork](
 
 Digest and HTTP transport integration tests require the pinned ESPAsyncWebServer sources, installed by the commands below. They exercise its Digest verifier and actual send-buffer code, including partial TCP writes and retrying data sources.
 
-The validated development host is **Linux x86_64, Python 3.14.10**, with g++/ASan/UBSan, Node.js for JavaScript checks, and PlatformIO **6.2.0**. Other hosts need a compatible toolchain override in `platformio_override.ini`. WAdapter is already included in the repository; no submodule initialization is required.
+The validated development host is **Linux x86_64, Python 3.14** (CI uses 3.14.10), with g++/ASan/UBSan, Node.js for JavaScript checks, and PlatformIO **6.2.0**. Other hosts need a compatible toolchain override in `platformio_override.ini`. WAdapter is already included in the repository; no submodule initialization is required.
 
 ```sh
 git clone https://github.com/labodj/WThermostatBeca-labo.git
@@ -256,7 +256,7 @@ python -m unittest discover -s tests -v
 pio run -e wthermostat
 ```
 
-The normal image is written to `build_output/firmware/wthermostat-1.26.0-labo.bin`; matching ELF/MAP files are in `build_output/map/`. An optional `platformio_override.ini` can change local settings; copying the sample also overrides `appversion`, so remove or edit that sample value if you want the release filename.
+The normal image is written to `build_output/firmware/wthermostat-1.27.0.bin`; matching ELF/MAP files are in `build_output/map/`. An optional `platformio_override.ini` can change local settings; copying the sample also overrides `appversion`, so remove or edit that sample value if you want the release filename.
 
 | PlatformIO environment | Purpose |
 |---|---|
@@ -285,9 +285,9 @@ python3.14 -m venv /tmp/wthermostat-ha-tests
 /tmp/wthermostat-ha-tests/bin/python tests/homeassistant_schema.py
 ```
 
-The release has **68 native tests**, run locally at 64/32 bit with address/undefined-behavior sanitizers, plus two official HA tests and three firmware builds. The regressions cover UART command ordering, scheduling across midnight, ECO/BAC state, legacy configuration/identity migration, credential edge cases and documented timezone transitions.
+The release has **99 native tests**, run locally at 64/32 bit with address/undefined-behavior sanitizers, plus two official HA tests and three firmware builds. The regressions cover UART command ordering, scheduling across midnight, ECO/BAC state, legacy configuration/identity migration, credential edge cases and documented timezone transitions.
 
-GitHub Actions runs native tests, firmware builds and the packaged static check, with HA schemas in a separate job. Tagged push builds can prepare a draft pre-release after both succeed; publishing and physical qualification are separate steps. Build artifacts are available from the [workflow runs](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml). The tagged workflow can also be dispatched explicitly. Local compilation is the validated starting point; old Gitpod instructions are not required.
+GitHub Actions runs native tests, firmware builds and the packaged static check, with HA schemas in a separate job. Release packaging validates the normal/minimal ESP8266 image headers and checksums, checks gzip round trips, and includes normal symbols plus source/build manifests. Debug firmware stays in CI artifacts and is excluded from the installable release assets. Tagged push builds prepare a draft release package after both succeed; publishing and physical qualification are separate steps. Build artifacts are available from the [workflow runs](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml). The tagged workflow can also be dispatched explicitly. Local compilation is the validated starting point; old Gitpod instructions are not required.
 
 ## Reporting a problem
 
