@@ -44,6 +44,7 @@ struct IPAddress{byte octets[4]{};byte operator[](unsigned i){return octets[i];}
  if(sscanf(value.c_str(),"%u.%u.%u.%u%c",&a,&b,&c,&d,&tail)!=4||a>255||b>255||c>255||d>255)return false;
  octets[0]=a;octets[1]=b;octets[2]=c;octets[3]=d;return true;}};
 struct Wifi{
+    void setAutoReconnect(bool enabled){assert(enabled);}
     String lastPassword;bool locked=false;uint8_t selected[6]{};unsigned begins=0;int channel=-1;
     void begin(const char* ssid,const char* password,int ch,const uint8_t* address){
         assert(!strcmp(ssid,"room-wifi"));lastPassword=password;
@@ -59,6 +60,8 @@ struct Probe{
     WProperty apFallback{"ap","AP",BOOLEAN};WProperty*supportingApFallback=&apFallback;
     String extendedWifiPassword;
     WNetworkStrings networkStrings;
+    String removedIdx,removedTopic;unsigned removals=0;
+    bool sendMqttHassAutodiscover(bool remove){assert(remove);++removals;removedIdx=getIdx();removedTopic=getMqttTopic();return true;}
     uint8_t bssid[6]{};bool bssidLocked=false,restarted=false;
     Probe(bool minimal=false){settings->reallyReadSettings=false;
 '''
@@ -177,10 +180,35 @@ int main(){
     const String oldPassword=p.getMqttPassword();before=EEPROM.bytes;EEPROM.commitOk=false;
     p.handleHttpSave(&fail);assert(fail.status==500&&String(p.getMqttPassword())==oldPassword);
     for(unsigned i=0;i<640;++i)assert(EEPROM.bytes[i]==before[i]);EEPROM.commitOk=true;
-    puts("PASS BSSID parser, atomic HTTP validation, EEPROM preservation, minimal/normal and reconnect lock");
+
+    // Raw fields and all extension records share one commit, even when many values change.
+    auto whole=request();whole.fields["i"]="new-host";whole.fields["bssid"]="02:55:44:33:22:11";
+    whole.fields["p"]=String(std::string(63,'w'));whole.fields["mp"]=String(std::string(64,'m'));
+    whole.fields["mu"]=String(std::string(32,'u'));whole.fields["mt"]=String(std::string(64,'t'));
+    whole.fields["staticip"]="192.168.1.9";whole.fields["subnet"]="255.255.255.0";whole.fields["gateway"]="192.168.1.1";
+    whole.fields["apfb"]="true";whole.fields["authModePresent"]="1";
+    const String previousIdx=p.getIdx(),previousTopic=p.getMqttTopic();
+    commits=EEPROM.commits;p.handleHttpSave(&whole);assert(!whole.status&&EEPROM.commits==commits+1);
+#ifndef MINIMAL
+    assert(p.removedIdx==previousIdx&&p.removedTopic==previousTopic);
+#endif
+    const auto coherent=EEPROM.bytes;const String wifi=p.getPassword(),mqttSecret=p.getMqttPassword(),identity=p.getIdx();
+    auto failure=whole;failure.status=0;failure.fields["i"]="failed-host";failure.fields["p"]=String(std::string(63,'x'));
+    failure.fields["mp"]=String(std::string(64,'y'));failure.fields["bssid"]="";
+    const unsigned removals=p.removals;
+    commits=EEPROM.commits;EEPROM.failCommits=1;p.restarted=false;p.handleHttpSave(&failure);
+    assert(p.removals==removals);
+    assert(failure.status==500&&!p.restarted&&EEPROM.bytes==coherent&&EEPROM.commits==commits+1);
+    assert(String(p.getPassword())==wifi&&String(p.getMqttPassword())==mqttSecret&&String(p.getIdx())==identity);
+    p.loadBssid();assert(p.getBssid()=="02:55:44:33:22:11");
+    assert(WWifiPassword::load(p.getSsid(),p.settings->getString(PROP_PASSWORD))==wifi);
+    const char* restored[]={p.idx->c_str(),p.settings->getString(PROP_MQTTUSER),p.settings->getString(PROP_MQTTPASSWORD),p.mqttBaseTopic->c_str()};
+    assert(p.networkStrings.loadAndMigrate(restored,nullptr)&&String(p.getMqttPassword())==mqttSecret);
+    puts("PASS BSSID parser, one-commit saves, failed-commit rollback, EEPROM preservation, minimal/normal and reconnect lock");
 }
 '''
-        native.NativeTests().compile_run(source, 'wifi_bssid')
+        native.NativeTests().compile_run(source, 'wifi_bssid_minimal')
+        native.NativeTests().compile_run(source.replace('#define MINIMAL', ''), 'wifi_bssid_normal')
 
     def test_production_retry_uses_locked_connection(self):
         text = NETWORK.read_text()

@@ -191,7 +191,7 @@ public:
     	return configNeedsReboot;
     }
 
-    virtual void printConfigPage(AsyncWebServerRequest *request, AsyncResponseStream* page) {
+    virtual void printConfigPage(AsyncWebServerRequest *request, WCheckedPrint* page) {
 
     }
 
@@ -275,7 +275,7 @@ public:
 	virtual bool hasInfoPage() {
 		return false;
 	}
-	virtual void printInfoPage(AsyncResponseStream* page) {
+	virtual void printInfoPage(WCheckedPrint* page) {
 	}
 
 	virtual void webserverInitHook(AsyncWebServer *webServer) {

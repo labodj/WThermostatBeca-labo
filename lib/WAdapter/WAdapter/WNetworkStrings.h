@@ -34,7 +34,7 @@ public:
         return save(full);
     }
 
-    static bool save(const String (&values)[4]) {
+    static bool save(const String (&values)[4], bool staged = false) {
         byte record[recordSize]{};
         unsigned position = 8;
         bool needed = false;
@@ -52,14 +52,17 @@ public:
             const uint32_t hash = checksum(record);
             for (unsigned i = 0; i < 4; ++i) record[4 + i] = static_cast<byte>(hash >> (8 * i));
         } else memset(record, 0xFF, sizeof(record));
-        EEPROM.begin(EEPROM_SIZE);
-        if (EEPROM.length() != EEPROM_SIZE) { EEPROM.end(); return false; }
+        if (!staged) EEPROM.begin(EEPROM_SIZE);
+        if (EEPROM.length() != EEPROM_SIZE) { if (!staged) EEPROM.end(); return false; }
         bool changed = false;
         for (unsigned i = 0; i < recordSize; ++i) changed |= EEPROM.read(static_cast<int>(address + i)) != record[i];
         if (changed)
             for (unsigned i = 0; i < recordSize; ++i) EEPROM.write(static_cast<int>(address + i), record[i]);
-        const bool saved = !changed || EEPROM.commit();
-        EEPROM.end();
+        const bool saved = staged || !changed || EEPROM.commit();
+        if (!staged) {
+            if (!saved) EEPROM.begin(EEPROM_SIZE);
+            EEPROM.end();
+        }
         return saved;
     }
 

@@ -32,7 +32,7 @@ const static char* DEFAULT_TIME_STD PROGMEM = "0,10,0,3,60";
 
 const static char HTTP_TEXT_CLOCK_HOWTO[] PROGMEM = R"=====(
 <div>
-See <a href="https://github.com/fashberg/WThermostatBeca/blob/master/Configuration.md#4-configure-clock-settings"
+See <a href="https://github.com/labodj/WThermostatBeca-labo/blob/master/Configuration.md#4-configure-clock-settings"
 target="_blank" rel="noopener">clock configuration documentation (opens a new tab)</a>
 for Howto set Timezone and Daylight-Savings
 </div>
@@ -265,44 +265,38 @@ class WClock : public WDevice {
         Rtc.local_time = Rtc.utc_time + Rtc.time_timezone;
         BreakTime(Rtc.local_time, RtcTime);
 
-        if (notify || (RtcTime.minute==0 && RtcTime.second==0)){
-            if (Rtc.local_time > START_VALID_TIME) {  // 2016-01-01
-                network->log()->trace(F("Clock Recalc Timezone %d"),  Rtc.local_time);
-                int32_t newTz;
-                if (this->timezone_hours!= 99) {
-                    newTz = (this->timezone_hours * 3600L) + (this->timezone_minutes * 60L * (this->timezone_hours < 0 ? -1 : 1));
+        // Compare cached transitions every tick: a blocked loop may miss second zero.
+        if (Rtc.local_time > START_VALID_TIME) {  // 2016-01-01
+            int32_t newTz;
+            if (this->timezone_hours!= 99) {
+                newTz = (this->timezone_hours * 3600L) + (this->timezone_minutes * 60L * (this->timezone_hours < 0 ? -1 : 1));
 
-                } else {
-                    int32_t dstoffset = this->timeRuleDst.offset * 60L;
-                    int32_t stdoffset = this->timeRuleStd.offset * 60L;
-                    
-                    if (Rtc.standard_time < Rtc.daylight_saving_time) { 
-                        // Southern hemisphere
-                        network->log()->trace(F("This year switch to DST/STD: %d / %d (Southern)"),
-                        Rtc.daylight_saving_time, Rtc.standard_time);
-                        if ((Rtc.utc_time >= (Rtc.standard_time - dstoffset)) && (Rtc.utc_time < (Rtc.daylight_saving_time - stdoffset))) {
-                            newTz = stdoffset;  // Standard Time
-                        } else {
-                            newTz = dstoffset;  // Daylight Saving Time
-                        }
+            } else {
+                int32_t dstoffset = this->timeRuleDst.offset * 60L;
+                int32_t stdoffset = this->timeRuleStd.offset * 60L;
+
+                if (Rtc.standard_time < Rtc.daylight_saving_time) {
+                    // Southern hemisphere
+                    if ((Rtc.utc_time >= (Rtc.standard_time - dstoffset)) && (Rtc.utc_time < (Rtc.daylight_saving_time - stdoffset))) {
+                        newTz = stdoffset;  // Standard Time
                     } else {
-                        // Northern hemisphere
-                        network->log()->trace(F("This year switch to DST/STD: %d / %d (Northern)"),
-                        Rtc.standard_time, Rtc.daylight_saving_time);
-                        if ((Rtc.utc_time >= (Rtc.daylight_saving_time - stdoffset)) && (Rtc.utc_time < (Rtc.standard_time - dstoffset))) {
-                            newTz = dstoffset;  // Daylight Saving Time
-                        } else {
-                            newTz = stdoffset;  // Standard Time
-                        }
+                        newTz = dstoffset;  // Daylight Saving Time
+                    }
+                } else {
+                    // Northern hemisphere
+                    if ((Rtc.utc_time >= (Rtc.daylight_saving_time - stdoffset)) && (Rtc.utc_time < (Rtc.standard_time - dstoffset))) {
+                        newTz = dstoffset;  // Daylight Saving Time
+                    } else {
+                        newTz = stdoffset;  // Standard Time
                     }
                 }
-                if (Rtc.time_timezone!=newTz){
-                    network->log()->notice(F("TZ Change %d -> %d"), Rtc.time_timezone, newTz);
-                    Rtc.time_timezone = newTz;
-                    notify=true;
-                    Rtc.local_time = Rtc.utc_time + Rtc.time_timezone;
-                    BreakTime(Rtc.local_time, RtcTime);
-                } 
+            }
+            if (Rtc.time_timezone!=newTz){
+                network->log()->notice(F("TZ Change %d -> %d"), Rtc.time_timezone, newTz);
+                Rtc.time_timezone = newTz;
+                notify=true;
+                Rtc.local_time = Rtc.utc_time + Rtc.time_timezone;
+                BreakTime(Rtc.local_time, RtcTime);
             }
         }
 
@@ -463,16 +457,16 @@ class WClock : public WDevice {
         return offset->getInteger();
     }
 
-    void printConfigPage(AsyncWebServerRequest *request, AsyncResponseStream* page) override {
+    void printConfigPage(AsyncWebServerRequest *request, WCheckedPrint* page) override {
         network->log()->notice(F("Clock config page"));
-        page->printf_P(HTTP_CONFIG_PAGE_BEGIN, getId());
-        page->printf_P(HTTP_TEXT_FIELD, "NTP server:", "ntp", 32, htmlEscapedString(ntpServer->c_str()).c_str());
-        page->printf_P(HTTP_TEXT_FIELD, "Timezone:", "tzone", 6, htmlEscapedString(timeZoneConfig->c_str()).c_str());
-        page->printf_P(HTTP_TEXT_FIELD, "TimeRule switch to Daylight Saving Time:", "tdst", 14, htmlEscapedString(timeDST->c_str()).c_str());
-        page->printf_P(HTTP_TEXT_FIELD, "TimeRule switch Back to Standard Time:", "tstd", 14, htmlEscapedString(timeSTD->c_str()).c_str());
-        page->printf_P(HTTP_TEXT_CLOCK_HOWTO);
-        page->printf_P(HTTP_CONFIG_SAVEANDREBOOT_BUTTON);
-        page->printf_P(HTTP_HOME_BUTTON);
+        page->format(HTTP_CONFIG_PAGE_BEGIN, getId(), network->getCsrfToken());
+        page->format(HTTP_TEXT_FIELD, "NTP server:", "ntp", 32, htmlEscapedString(ntpServer->c_str()).c_str());
+        page->format(HTTP_TEXT_FIELD, "Timezone:", "tzone", 6, htmlEscapedString(timeZoneConfig->c_str()).c_str());
+        page->format(HTTP_TEXT_FIELD, "TimeRule switch to Daylight Saving Time:", "tdst", 14, htmlEscapedString(timeDST->c_str()).c_str());
+        page->format(HTTP_TEXT_FIELD, "TimeRule switch Back to Standard Time:", "tstd", 14, htmlEscapedString(timeSTD->c_str()).c_str());
+        page->format(HTTP_TEXT_CLOCK_HOWTO);
+        page->format(HTTP_CONFIG_SAVEANDREBOOT_BUTTON);
+        page->format(HTTP_HOME_BUTTON);
     }
 
     void saveConfigPage(AsyncWebServerRequest *request) override {
@@ -718,7 +712,7 @@ class WClock : public WDevice {
         return true;
     }
 
-    void printInfoPage(AsyncResponseStream* page) override {
+    void printInfoPage(WCheckedPrint* page) override {
         htmlTableRowTitle(page, F("Time-Valid:"));
         page->print((isValidTime()  ? "Yes" : "No"));
         htmlTableRowEnd(page);
@@ -731,9 +725,9 @@ class WClock : public WDevice {
         page->print(offset->getInteger());
         htmlTableRowEnd(page);
 
-        page->print(F("<tr><th>Last-NTP-Sync Try:</th><td>"));
+        page->print(F("<tr><th scope='row'>Last-NTP-Sync Try:</th><td>"));
         if (lastTry){
-            page->printf("%lu Seconds ago", (millis()-lastTry)/1000);
+            page->format("%lu Seconds ago", (millis()-lastTry)/1000);
         } else {
             page->print(F("Never"));
         }        
@@ -741,7 +735,7 @@ class WClock : public WDevice {
 
         htmlTableRowTitle(page, F("Last-NTP-Sync with Success:"));
         if (lastNtpSync){
-            page->printf("%lu Seconds ago", (millis()-lastNtpSync)/1000);
+            page->format("%lu Seconds ago", (millis()-lastNtpSync)/1000);
         } else {
             page->print(F("Never"));
         }

@@ -159,17 +159,9 @@ private:
     }
 
 	void print(int level, const __FlashStringHelper *format, va_list args) {
-		char logbuf[256];
-		size_t size = sizeof logbuf;
-		PGM_P p = reinterpret_cast<PGM_P>(format);
-		char c;
-		unsigned int pos=0;
-		for(; pos < size-1 && (c = pgm_read_byte(p++)) != 0; pos++) {
-				logbuf[pos]=c;	
-		}
-		logbuf[pos]=0;
-		print(level, logbuf, args);
-	}
+        // vsnprintf_P already reads formats from flash; avoid a second stack buffer.
+        print(level, reinterpret_cast<const char*>(format), args);
+    }
 
 
 

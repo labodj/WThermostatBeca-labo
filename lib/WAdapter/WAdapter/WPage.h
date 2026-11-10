@@ -5,6 +5,7 @@
 #include <utility>
 #include <Arduino.h>
 #include "WStringStream.h"
+#include "WCheckedPrint.h"
 
 
 class WPage {
@@ -23,13 +24,13 @@ public:
 
 	// IDs and titles are borrowed shared strings.
 	virtual ~WPage() = default;
-    typedef std::function<void(AsyncWebServerRequest*, AsyncResponseStream*)> TCommandPage;
+    typedef std::function<void(AsyncWebServerRequest*, WCheckedPrint*)> TCommandPage;
 
-    virtual void printPage(AsyncWebServerRequest *request, AsyncResponseStream* page) {
+    virtual void printPage(AsyncWebServerRequest *request, WCheckedPrint* page) {
         if (onPrintPage) onPrintPage(request, page);
     }
 
-    virtual void submittedPage(AsyncWebServerRequest *request, AsyncResponseStream* page) {
+    virtual void submittedPage(AsyncWebServerRequest *request, WCheckedPrint* page) {
         if (onSubmittedPage) onSubmittedPage(request, page);
     }
 

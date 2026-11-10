@@ -2,6 +2,7 @@
 #define W_SETTINGS_H
 
 #include "EEPROM.h"
+#include <new>
 #include "WLog.h"
 #include "WProperty.h"
 
@@ -118,37 +119,81 @@ public:
         }
     }
 
-	void save(WProperty* property) {
-        if (!writesEnabled) return;
-		WSettingItem* settingItem = firstSetting;
-		while (settingItem != nullptr) {
-			if (property == settingItem->value) {
-				EEPROM.begin(EEPROM_SIZE);
-				save(settingItem);
-				EEPROM.commit();
-				EEPROM.end();
-			}
-			settingItem = settingItem->next;
-		}
-	}
+    bool save(WProperty* property) {
+        if (updating) return true;
+        if (!writesEnabled) return false;
+        // Legacy addresses may differ; defer autosaves until the full layout is migrated.
+        if (!_settingsNetworkIsCurrent) return true;
+        for (const WSettingItem* item = firstSetting; item; item = item->next) {
+            if (item->value != property) continue;
+            EEPROM.begin(EEPROM_SIZE);
+            const bool saved = EEPROM.length() == EEPROM_SIZE && save(item) && EEPROM.commit();
+            closeStorage(saved);
+            return saved;
+        }
+        return false;
+    }
 
-	void save() {
-        if (!writesEnabled) return;
-		EEPROM.begin(EEPROM_SIZE);
-		WSettingItem* settingItem = firstSetting;
-		int address=0;
-		while (settingItem != nullptr) {
-			settingItem->address=address;
-			save(settingItem);
-			address+=settingItem->value->getLength(); //recalculate address while writing, during upgrade read-positions may differ
-			settingItem = settingItem->next;
-		}
-		//1. Byte - settingsStored flag
-		EEPROM.write(0, FLAG_OPTIONS_NETWORK_CURRENT);
-		EEPROM.write(1, this->appSettingsFlag);
-		EEPROM.commit();
-		EEPROM.end();
-	}
+    bool save() {
+        if (updating) return true;
+        if (!writesEnabled) return false;
+        EEPROM.begin(EEPROM_SIZE);
+        const bool saved = EEPROM.length() == EEPROM_SIZE && stageSettings() && EEPROM.commit();
+        closeStorage(saved);
+        if (saved) _settingsNetworkIsCurrent = true;
+        return saved;
+    }
+
+    // One form shares one EEPROM session, including extension records.
+    bool beginUpdate(bool recover = false) {
+        if (updating || (!writesEnabled && !recover)) return false;
+        unsigned count = 0;
+        for (const WSettingItem* item = firstSetting; item; item = item->next) ++count;
+        snapshot = new (std::nothrow) Snapshot[count];
+        if (!snapshot) return false;
+        unsigned i = 0;
+        for (const WSettingItem* item = firstSetting; item; item = item->next, ++i) {
+            snapshot[i].value = item->value->getValue();
+            if (item->value->getType() == STRING) {
+                snapshot[i].text = item->value->c_str();
+                if (snapshot[i].text.length() != strlen(item->value->c_str())) {
+                    delete[] snapshot; snapshot = nullptr; return false;
+                }
+            }
+        }
+        EEPROM.begin(EEPROM_SIZE);
+        if (EEPROM.length() != EEPROM_SIZE) {
+            EEPROM.end(); delete[] snapshot; snapshot = nullptr; return false;
+        }
+        updating = true;
+        return true;
+    }
+
+    bool endUpdate(bool valid = true) {
+        if (!updating) return false;
+        const bool saved = valid && stageSettings() && EEPROM.commit();
+        closeStorage(saved, valid);
+        if (!saved) {
+            unsigned i = 0;
+            for (WSettingItem* item = firstSetting; item; item = item->next, ++i) {
+                WProperty* property = item->value;
+                const WPropertyValue value = snapshot[i].value;
+                switch (property->getType()) {
+                    case BOOLEAN: property->setBoolean(value.asBoolean); break;
+                    case BYTE: property->setByte(value.asByte); break;
+                    case INTEGER: property->setInteger(value.asInteger); break;
+                    case LONG: property->setLong(value.asLong); break;
+                    case UNSIGNED_LONG: property->setUnsignedLong(value.asUnsignedLong); break;
+                    case DOUBLE: property->setDouble(value.asDouble); break;
+                    case STRING: property->setString(snapshot[i].text.c_str()); break;
+                }
+            }
+        }
+        if (saved) { _settingsNetworkIsCurrent = true; writesEnabled = true; }
+        updating = false;
+        delete[] snapshot; snapshot = nullptr;
+        return saved;
+    }
 
 	bool existsSetting(const String& id) {
 		return (getSetting(id) != nullptr);
@@ -433,7 +478,7 @@ protected:
 		return settingItem;
 	}
 
-	void save(WSettingItem* settingItem) {
+	bool save(const WSettingItem* settingItem) {
 		WProperty* setting = settingItem->value;
 
 		log->trace(F("Saving setting: Address=%d, Id='%s', size=%d, Max: %d"),
@@ -441,7 +486,7 @@ protected:
 		if (settingItem->address  + startAddressSaveOffset + setting->getLength() > EEPROM_SIZE){
 			log->error(F("Cannot save to EPROM. Size too small, Adrress=%d, Id='%s', size=%d, Max: %d"),
 				settingItem->address + startAddressSaveOffset, setting->getId(), setting->getLength(), EEPROM_SIZE);
-			return;
+			return false;
 		}
 		switch (setting->getType()){
 		case BOOLEAN:
@@ -488,11 +533,40 @@ protected:
 			break;
 		}
 
+        return true;
 	}
 WSettingItem* firstSetting = nullptr;
 WSettingItem* lastSetting = nullptr;
 
 private:
+    struct Snapshot { WPropertyValue value{}; String text; };
+    Snapshot* snapshot = nullptr;
+    bool updating = false;
+
+    void closeStorage(bool saved, bool attempted = true) {
+        // end() retries dirty writes. Reload first after failure to avoid a hidden retry.
+        if (!saved) {
+            EEPROM.begin(EEPROM_SIZE);
+            if (attempted) {
+                writesEnabled = false;
+                log->error(F("Settings write failed; autosaves disabled until a complete network save succeeds"));
+            }
+        }
+        EEPROM.end();
+    }
+
+    bool stageSettings() {
+        int address = 0;
+        for (WSettingItem* item = firstSetting; item; item = item->next) {
+            item->address = address;
+            if (!save(item)) return false;
+            address += item->value->getLength();
+        }
+        EEPROM.write(0, FLAG_OPTIONS_NETWORK_CURRENT);
+        EEPROM.write(1, appSettingsFlag);
+        return true;
+    }
+
 	WLog* log;
 	byte appSettingsFlag;
 	bool _existsSettingsNetwork, _existsSettingsApplication;

@@ -41,9 +41,9 @@ public:
         return result;
     }
 
-    static bool save(const char* ssid, const String& password) {
+    static bool save(const char* ssid, const String& password, bool staged = false) {
         if (!valid(password)) return false;
-        EEPROM.begin(EEPROM_SIZE);
+        if (!staged) EEPROM.begin(EEPROM_SIZE);
         if (EEPROM.length() != EEPROM_SIZE) return false;
         EEPROM.write(512, password.length() > 32 ? 0x57 : 0xFF);
         EEPROM.write(513, 1);
@@ -53,8 +53,11 @@ public:
         EEPROM.put(516, hash);
         for (int i = 0; i < 64; ++i)
             EEPROM.write(520 + i, i < static_cast<int>(password.length()) ? static_cast<byte>(password[i]) : 0);
-        const bool saved = EEPROM.commit();
-        EEPROM.end();
+        const bool saved = staged || EEPROM.commit();
+        if (!staged) {
+            if (!saved) EEPROM.begin(EEPROM_SIZE);
+            EEPROM.end();
+        }
         return saved;
     }
 };

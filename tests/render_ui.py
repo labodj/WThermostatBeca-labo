@@ -4,26 +4,26 @@ This preview never forwards requests to a device. POST requests are rejected.
 """
 import argparse
 import configparser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import tempfile
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import urlsplit
 
-from test_regressions import ROOT, BECA, NETWORK, method
+from test_regressions import BECA, NETWORK, ROOT, method
 
 
 def raw_asset(path, name):
-    match = re.search(re.escape(name) + r'\[\].*?R"=====\((.*?)\)=====";', path.read_text(), re.S)
+    match = re.search(re.escape(name) + r'\[\].*?R"=====\((.*?)\)=====";', path.read_text(), re.DOTALL)
     if not match:
         raise ValueError(f"Missing production asset {name}")
     return match.group(1)
 
 
-def render_pages(response_heap_budget=0):
+def render_pages(response_heap_budget=0, largest_heap_block=24000, response_allocation_fails=False, fail_header_write=False):
     beca = BECA.read_text()
     network = NETWORK.read_text()
     log = ROOT / "WThermostat/WLogDevice.h"
@@ -32,30 +32,24 @@ def render_pages(response_heap_budget=0):
 #include "Arduino.h"
 #include "Stream.h"
 #include <map>
-struct AsyncResponseStream:Print{
-    std::string body;
-    size_t capacity=0;
-    // Model cbuf's copy-before-free growth; this is not an ESP allocator emulator.
-    size_t write(const uint8_t*data,size_t length)override{
-        if(body.size()+length>=capacity){
-            size_t needed=body.size()+length+1;
-            if(!HEAP_BUDGET || capacity+needed<=HEAP_BUDGET)capacity=needed;
-        }
-        size_t written=std::min(length,capacity-body.size()-1);
-        body.append(reinterpret_cast<const char*>(data),written);return written;
-    }
-    size_t write(uint8_t c)override{return write(&c,1);}
-    template<class...T>size_t printf(const char*f,T...v){return printf_P(f,v...);}
-    void addHeader(const char*,const char*){}
-};
+#include "lib/WAdapter/WAdapter/WPageResponse.h"
+size_t allocationBudget=HEAP_BUDGET?HEAP_BUDGET:SIZE_MAX;
+void*operator new(size_t size,const std::nothrow_t&)noexcept{
+    if(FAIL_RESPONSE || size>MAX_BLOCK || size>allocationBudget || (FAIL_HEADER_WRITE && size>200))return nullptr;
+    allocationBudget-=size;return ::operator new(size);
+}
 struct AsyncWebServerRequest{
+    void removeHeaders(){}
     struct Client{int localIP(){return 1;}};Client*client(){return nullptr;}
-    AsyncResponseStream response;
-    AsyncResponseStream*beginResponseStream(const char*,unsigned capacity){
-        assert(!HEAP_BUDGET || capacity<=HEAP_BUDGET);
-        response.capacity=capacity;return &response;
+    std::string body;int status=0;
+    AsyncWebServerRequest(){allocationBudget=HEAP_BUDGET?HEAP_BUDGET:SIZE_MAX;}
+    void send(WPageResponse*r){
+        assert(r->_sourceValid());r->startForTest();uint8_t data[536];
+        while(size_t size=r->_fillBuffer(data,sizeof(data)))body.append(reinterpret_cast<char*>(data),size);
+        assert(body.size()==r->contentLength());status=200;delete r;
     }
-    void send(AsyncResponseStream*){}
+    void send(int code){status=code;body.clear();}
+    void send(int code,const char*,const char*){send(code);}
 };
 #include "lib/WAdapter/WAdapter/WHtmlPages.h"
 #include "lib/WAdapter/WAdapter/WPage.h"
@@ -66,24 +60,25 @@ String macAddress(){return "AA:BB:CC:DD:EE:FF";}String BSSIDstr(){return "02:11:
 struct Chip{unsigned getChipId(){return 12345;}unsigned getFlashChipId(){return 123;}
 unsigned getFlashChipSize(){return 1048576;}unsigned getFlashChipRealSize(){return 1048576;}
 unsigned getSketchSize(){return 472112;}unsigned getFreeSketchSpace(){return 552960;}
-unsigned getFreeHeap(){return 33000;}unsigned getMaxFreeBlockSize(){return 24000;}unsigned getHeapFragmentation(){return 3;}}ESP;
+String getResetReason(){return "Software/System restart";}String getResetInfo(){return "No exception";}unsigned getFreeHeap(){return 33000;}unsigned getMaxFreeBlockSize(){return MAX_BLOCK;}unsigned getHeapFragmentation(){return 3;}}ESP;
 struct Log{template<class...T>void notice(T...){}};
 enum class wnWifiMode{WIFIMODE_STATION,WIFIMODE_FALLBACK};using wnWifiMode_t=wnWifiMode;
-const char*CT_TEXT_HTML="text/html",*ID_NETWORK="network";
+const char*CT_TEXT_HTML="text/html",*CT_TEXT_PLAIN="text/plain",*ID_NETWORK="network";
+enum WebRequestMethod{HTTP_GET,HTTP_POST};
 const char*FORM_PW_NOCHANGE="___NOCHANGE___";
 struct WDevice{
     WDevice*next=nullptr;WPage*firstPage=nullptr;const char*id;const char*name;
     WDevice(const char*i,const char*n):id(i),name(n){}
-    std::function<void(AsyncResponseStream*)>info;
-    std::function<void(AsyncWebServerRequest*,AsyncResponseStream*)>config;
+    std::function<void(WCheckedPrint*)>info;
+    std::function<void(AsyncWebServerRequest*,WCheckedPrint*)>config;
     bool isProvidingConfigPage(){return true;}bool hasInfoPage(){return static_cast<bool>(info);}
     const char*getId(){return id;}const char*getName(){return name;}
-    void printInfoPage(AsyncResponseStream*p){if(info)info(p);}
-    void printConfigPage(AsyncWebServerRequest*r,AsyncResponseStream*p){if(config)config(r,p);}
+    void printInfoPage(WCheckedPrint*p){if(info)info(p);}
+    void printConfigPage(AsyncWebServerRequest*r,WCheckedPrint*p){if(config)config(r,p);}
 };
 struct Net{
-    Log logger;Log*wlog=&logger;AsyncResponseStream*page=nullptr;WDevice*firstDevice=nullptr;
-    String applicationName="WThermostatBeca",firmwareVersion="1.24-labo.1",csrfToken="preview-token",address;
+    Log logger;Log*wlog=&logger;WDevice*firstDevice=nullptr;
+    String applicationName="WThermostatBeca",firmwareVersion=PREVIEW_VERSION,csrfToken="preview-token",address;
     bool debug=false,enabled=true,staticEnabled=false,bssidLocked=false;const char*restartFlag=nullptr;
     unsigned long apStartedAt=0;wnWifiMode wifiModeRunning=wnWifiMode::WIFIMODE_STATION;
     Log*log(){return &logger;}bool isWebServerRunning(){return true;}
@@ -103,14 +98,14 @@ struct Net{
 };
 '''
     # Add the real header/footer and handlers to the mock network class.
-    start = network.index("\ttemplate<class T, typename ... Args> AsyncResponseStream * httpHeader")
+    start = network.index("\ttemplate<class T, typename ... Args> WCheckedPrint * httpHeader")
     end = network.index("\n\tString getClientName", start)
-    methods = method(NETWORK, "printHttpCaption") + network[start:end]
-    for name in ("handleHttpRootRequest", "handleHttpDeviceConfiguration", "handleHttpDevicePage", "ipToStr", "handleHttpNetworkConfiguration", "handleHttpFirmwareUpdate", "handleHttpInfo"):
+    methods = method(NETWORK, "getCsrfToken") + method(NETWORK, "printHttpButton") + method(NETWORK, "printHttpCaption") + network[start:end]
+    for name in ("handleHttpRootRequest", "handleHttpDeviceConfiguration", "handleHttpDevicePage", "handleHttpDevicePageSubmitted", "webReturnStatusPage", "ipToStr", "handleHttpNetworkConfiguration", "handleHttpFirmwareUpdate", "handleHttpInfo"):
         methods += method(NETWORK, name)
     source = source.removesuffix("};\n") + methods + "\n};\n"
     source += beca[beca.index("const static char HTTP_CONFIG_SCHTAB_HEAD"):beca.index("class WBecaDevice:")]
-    source += '\nconst char HTTP_TEXT_CLOCK_HOWTO[]="' + raw_asset(clock, "HTTP_TEXT_CLOCK_HOWTO").replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '";\n'
+    source += '\nconst char HTTP_TEXT_CLOCK_HOWTO[]=' + json.dumps(raw_asset(clock, "HTTP_TEXT_CLOCK_HOWTO")) + ';\n'
     source += log.read_text()[log.read_text().index("const char* ID_LOGDEVICE"):log.read_text().index("AsyncWebSocket wslog")]
     source += r'''
 enum{LOG_LEVEL_SILENT,LOG_LEVEL_FATAL,LOG_LEVEL_ERROR,LOG_LEVEL_WARNING,LOG_LEVEL_NOTICE,LOG_LEVEL_TRACE,LOG_LEVEL_VERBOSE};
@@ -128,7 +123,7 @@ struct Beca{
 '''+method(BECA, "printConfigPage")+method(BECA, "printInfoPage")
     schedule = beca.split("schedulePage->setPrintPage(", 1)[1].split("schedulePage->setSubmittedPage(", 1)[0]
     schedule = schedule[schedule.index("{") + 1:schedule.rindex("});")]
-    source += '\nvoid printSchedules(AsyncWebServerRequest*request,AsyncResponseStream*page){WPage item("schedules","Schedules");WPage*schedulePage=&item;' + schedule + "}\n};\n"
+    source += '\nvoid printSchedules(AsyncWebServerRequest*request,WCheckedPrint*page){WPage item("schedules","Schedules");WPage*schedulePage=&item;' + schedule + "}\n};\n"
     source += r'''
 struct Clock{
     Net*network;Value server{"pool.ntp.org"},zone{"99"},dst{"0,3,0,2,120"},standard{"0,10,0,3,60"};
@@ -143,17 +138,19 @@ struct Logging{
     int getlogLevelByte(){return 3;}int getlogLevelWebByte(){return 5;}
 '''+method(log, "printConfigPage")+r'''
 };
-void emit(const char*name,AsyncWebServerRequest&r){printf("%s\n%s\x1e",name,r.response.body.c_str());}
+void emit(const char*name,AsyncWebServerRequest&r){printf("%s\n%s\x1e",name,r.body.c_str());}
 int main(){
     Net net;Beca beca(&net);Clock clock(&net);Logging logging(&net);
     WDevice therm("thermostat","Thermostat"),time("clock","Clock"),logs("logging","Logging");
     WPage schedules("schedules","Configure schedules"),reinit("reinit","Reinitialize thermostat"),weblog("weblog","Live log");
-    therm.info=[&](AsyncResponseStream*p){beca.printInfoPage(p);};time.info=[&](AsyncResponseStream*p){clock.printInfoPage(p);};
-    therm.config=[&](AsyncWebServerRequest*r,AsyncResponseStream*p){beca.printConfigPage(r,p);};
-    time.config=[&](AsyncWebServerRequest*r,AsyncResponseStream*p){clock.printConfigPage(r,p);};
-    logs.config=[&](AsyncWebServerRequest*r,AsyncResponseStream*p){logging.printConfigPage(r,p);};
+    therm.info=[&](WCheckedPrint*p){beca.printInfoPage(p);};time.info=[&](WCheckedPrint*p){clock.printInfoPage(p);};
+    therm.config=[&](AsyncWebServerRequest*r,WCheckedPrint*p){beca.printConfigPage(r,p);};
+    time.config=[&](AsyncWebServerRequest*r,WCheckedPrint*p){clock.printConfigPage(r,p);};
+    logs.config=[&](AsyncWebServerRequest*r,WCheckedPrint*p){logging.printConfigPage(r,p);};
     therm.next=&time;time.next=&logs;therm.firstPage=&schedules;schedules.next=&reinit;logs.firstPage=&weblog;net.firstDevice=&therm;
-    schedules.setPrintPage([&](AsyncWebServerRequest*r,AsyncResponseStream*p){beca.printSchedules(r,p);});
+    schedules.setPrintPage([&](AsyncWebServerRequest*r,WCheckedPrint*p){beca.printSchedules(r,p);});
+    unsigned submitted=0;
+    schedules.setSubmittedPage([&](AsyncWebServerRequest*,WCheckedPrint*p){++submitted;p->print("Submitted preview");});
     {AsyncWebServerRequest r;net.handleHttpRootRequest(&r);emit("/config",r);}
     {AsyncWebServerRequest r;net.handleHttpNetworkConfiguration(&r);emit("/wifi",r);}
     {AsyncWebServerRequest r;net.enabled=false;net.handleHttpNetworkConfiguration(&r);emit("/wifi-off",r);net.enabled=true;}
@@ -165,18 +162,22 @@ int main(){
     {AsyncWebServerRequest r;net.handleHttpDeviceConfiguration(&r,&time);emit("/clock",r);}
     {AsyncWebServerRequest r;net.handleHttpDeviceConfiguration(&r,&logs);emit("/logging",r);}
     {AsyncWebServerRequest r;net.handleHttpDevicePage(&r,&therm,&schedules);emit("/thermostat_schedules",r);}
+    {AsyncWebServerRequest r;net.handleHttpDevicePageSubmitted(&r,&therm,&schedules);emit("/submitted-preview",r);}
+    assert(submitted==(FAIL_RESPONSE || FAIL_HEADER_WRITE || MAX_BLOCK<1024U ? 0U : 1U));
+    {AsyncWebServerRequest r;net.webReturnStatusPage(&r,F("Saved preview"),"");emit("/saved-preview",r);}
+    {AsyncWebServerRequest r;net.restartFlag="Preview status";net.handleHttpRootRequest(&r);emit("/restart-status-preview",r);net.restartFlag=nullptr;}
     {AsyncWebServerRequest r;beca.factor=10;net.handleHttpDevicePage(&r,&therm,&schedules);emit("/schedules-fine",r);beca.factor=2;}
     {AsyncWebServerRequest r;beca.factor=1;net.handleHttpDevicePage(&r,&therm,&schedules);emit("/schedules-whole",r);beca.factor=2;}
-    {AsyncWebServerRequest r;auto*p=net.httpHeader(&r,"Live log");net.printHttpCaption(p);p->print(FPSTR(HTTP_WEBLOG));p->print(FPSTR(HTTP_HOME_BUTTON));p->print(FPSTR(HTTP_WEBLOG_SCRIPT));net.httpFooter(p);emit("/logging_weblog",r);}
+    {AsyncWebServerRequest r;auto*p=net.httpHeader(&r,"Live log");if(p){net.printHttpCaption(p);p->format(HTTP_WEBLOG,net.getCsrfToken());p->print(FPSTR(HTTP_HOME_BUTTON));p->print(FPSTR(HTTP_WEBLOG_SCRIPT));net.httpFooter(p);net.sendHttpPage(&r,p);}emit("/logging_weblog",r);}
     {AsyncWebServerRequest r;net.handleHttpFirmwareUpdate(&r);emit("/firmware",r);}
     {AsyncWebServerRequest r;net.handleHttpInfo(&r);emit("/info",r);}
     {AsyncWebServerRequest r;beca.model=1;net.handleHttpInfo(&r);emit("/info-bac",r);}
 }
 '''
-    source = '#define HEAP_BUDGET ' + str(int(response_heap_budget)) + 'U\n' + source
+    source = '#include <new>\n#define MAX_BLOCK ' + str(int(largest_heap_block)) + 'U\n#define FAIL_RESPONSE ' + str(int(response_allocation_fails)) + '\n' + '#define FAIL_HEADER_WRITE ' + str(int(fail_header_write)) + '\n#define HEAP_BUDGET ' + str(int(response_heap_budget)) + 'U\n' + source
     config = configparser.ConfigParser(interpolation=None)
     config.read([ROOT / "platformio.ini", ROOT / "platformio_override.ini"])
-    source = source.replace('firmwareVersion="1.24-labo.1"', 'firmwareVersion=' + json.dumps(config["common"]["appversion"]))
+    source = '#define PREVIEW_VERSION ' + json.dumps(config["common"]["appversion"]) + '\n' + source
     with tempfile.TemporaryDirectory(prefix="wthermostat-ui-native-") as directory:
         cpp = Path(directory) / "preview.cpp"
         binary = Path(directory) / "preview"

@@ -61,8 +61,7 @@ public:
 		this->blue = strtol(buffer, NULL, 16);
 	}
 
-	bool canParse(const String& value) override {
-		if (isReadOnly()) return false;
+	bool isValidValue(const String& value) override {
 		if (value.startsWith("#") && value.length() == 7) {
 			for (unsigned i = 1; i < 7; ++i)
 				if (!isxdigit(static_cast<unsigned char>(value[i]))) return false;

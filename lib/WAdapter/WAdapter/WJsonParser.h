@@ -170,9 +170,9 @@ private:
                 if (!isNull) {
                     if (device) {
                         WProperty* property = device->getPropertyById(key);
-                        if (property && !property->isReadOnly()) {
-                            if (!property->canParse(value)) return false;
-                            if (apply && property->parse(value)) lastProperty = property;
+                        if (property) {
+                            if (!property->isValidValue(value)) return false;
+                            if (apply && !property->isReadOnly() && property->parse(value)) lastProperty = property;
                         }
                     } else {
                         if (validate && !validate(key, value)) return false;

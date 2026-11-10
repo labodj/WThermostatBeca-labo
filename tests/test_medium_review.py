@@ -179,6 +179,7 @@ struct IPAddress{uint32_t value;IPAddress(uint32_t v=0):value(v){}IPAddress(byte
  byte operator[](unsigned i)const{return value>>(i*8);}operator uint32_t()const{return value;}
  bool fromString(const char* s){unsigned a,b,c,d;if(sscanf(s,"%u.%u.%u.%u",&a,&b,&c,&d)!=4)return false;*this=IPAddress(a,b,c,d);return true;}};
 struct Wifi{int connected=0,modeValue=0;unsigned aps=0,disconnects=0;bool selectedLock=false,apOk=true;byte selected[6]{};
+ void setAutoReconnect(bool enabled){assert(enabled);}
  IPAddress ip{192,168,1,20},apIp{192,168,4,1};
  int status(){return connected;}void disconnect(){++disconnects;}void softAPdisconnect(bool=false){}bool mode(int m){modeValue=m;return true;}
  bool softAP(const char*,const char*){++aps;return apOk;}IPAddress softAPIP(){return apIp;}IPAddress localIP(){return ip;}IPAddress subnetMask(){return IPAddress(255,255,255,0);}

@@ -34,6 +34,9 @@ jobs:
             ~/.platformio
           key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini', 'requirements-dev.txt') }}
       - run: python -m pip install -r requirements-dev.txt
+      - name: Install pinned dependencies for Digest and transport integration tests
+        run: |
+          pio pkg install -e wthermostat
       - name: Native regression tests
         run: python -m unittest discover -s tests -v
       - name: Firmware version

@@ -168,7 +168,11 @@ public:
 	}
 
 	virtual bool canParse(const String& text) {
-		if (isReadOnly()) return false;
+        return !isReadOnly() && isValidValue(text);
+    }
+
+    // Value validation is independent of callbacks changing writability mid-command.
+    virtual bool isValidValue(const String& text) {
 		if (type == STRING) {
 			if (text.length() > length) return false;
 			if (!firstEnum) return true;

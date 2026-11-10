@@ -24,11 +24,14 @@
 #include "WAdapterMqtt.h"
 #endif
 #include "WStringStream.h"
+#include "WCheckedPrint.h"
+#include "WPageResponse.h"
 #include "WDevice.h"
 #include "WLed.h"
 #include "WSettings.h"
 #include "WWifiPassword.h"
 #include "WNetworkStrings.h"
+#include "WDigestAuth.h"
 #include "WJsonParser.h"
 #include "WLog.h"
 #include "webserverHelper.h"
@@ -163,14 +166,14 @@ public:
 #endif
 		/* https://github.com/esp8266/Arduino/blob/master/doc/esp8266wifi/station-class.rst#reconnect */
 		//Serial.printf("AC: %d, ARC: %d\n", WiFi.getAutoConnect(), WiFi.getAutoReconnect());
+        WiFi.persistent(false);
+        WiFi.setAutoConnect(false);
+        WiFi.setAutoReconnect(false);
 		WiFi.disconnect();
 		WiFi.mode(WiFiMode::WIFI_STA);
 		WiFi.encryptionType(wl_enc_type::ENC_TYPE_CCMP);
 		WiFi.setOutputPower(20.5);
 		WiFi.setPhyMode(WiFiPhyMode::WIFI_PHY_MODE_11N);
-		WiFi.setAutoConnect(false);
-		WiFi.setAutoReconnect(true);
-		WiFi.persistent(false);
 		this->applicationName = applicationName;
 		this->firmwareVersion = firmwareVersion;
 		webServer = nullptr;
@@ -255,6 +258,7 @@ public:
 		} 
 #endif
 		bool result = true;
+        enforceBssidLock();
         updateWifiRecovery(now);
 		if (wifiModeDesired!=wifiModeRunning){
             if (recoveryApActive) stopRecoveryAp();
@@ -383,7 +387,7 @@ public:
 #ifndef MINIMAL
 			if ((this->isMqttConnected()) && (this->isSupportingMqtt())
 					&& ((device->lastStateNotify == 0)
-							|| ((device->stateNotifyInterval > 0) && (now > device->lastStateNotify) &&
+							|| ((device->stateNotifyInterval > 0) &&
 								(now - device->lastStateNotify > device->stateNotifyInterval)))
 					&& (device->isDeviceStateComplete())) {
 				wlog->notice(F("Notify interval is up -> Device state changed..."));
@@ -820,12 +824,19 @@ public:
         return true;
     }
 
+    void enforceBssidLock() {
+        if (!bssidLocked || isUpdateRunning() || WiFi.status() != WL_CONNECTED) return;
+        const uint8_t* connected = WiFi.BSSID();
+        if (!connected || memcmp(connected, bssid, sizeof(bssid)) != 0) WiFi.disconnect();
+    }
+
     void connectWifi() {
         if (bssidLocked) {
             uint8_t address[6];
             if (!parseBssid(getBssid(), address)) return;
         }
         WiFi.begin(getSsid(), getPassword(), 0, bssidLocked ? bssid : nullptr);
+        WiFi.setAutoReconnect(true);
     }
 
     void loadBssid() {
@@ -836,12 +847,15 @@ public:
         EEPROM.end();
     }
 
-    bool saveBssid(const uint8_t* address, bool locked) {
-        EEPROM.begin(EEPROM_SIZE);
+    bool saveBssid(const uint8_t* address, bool locked, bool staged = false) {
+        if (!staged) EEPROM.begin(EEPROM_SIZE);
         EEPROM.write(LEGACY_EEPROM_SIZE - 8, locked ? 0xB5 : 0xFF);
         for (int i = 0; i < 6; ++i) EEPROM.write(LEGACY_EEPROM_SIZE - 7 + i, address[i]);
-        const bool saved = EEPROM.commit();
-        EEPROM.end();
+        const bool saved = staged || EEPROM.commit();
+        if (!staged) {
+            if (!saved) EEPROM.begin(EEPROM_SIZE);
+            EEPROM.end();
+        }
         return saved;
     }
 
@@ -946,6 +960,8 @@ public:
 		return applicationName;
 	}
 
+    const char* getCsrfToken() const { return csrfToken.c_str(); }
+
 	String getFirmwareVersion(){
 		return firmwareVersion;
 	}
@@ -989,12 +1005,14 @@ public:
             (router & hostMask) && (router & hostMask) != hostMask;
     }
 
+    WDigestAuth digestAuth;
+
     void requestAdminLogin(AsyncWebServerRequest* request) {
-        const String nonce = genRandomMD5(), opaque = genRandomMD5();
-        if (nonce.length() != 32 || opaque.length() != 32) { request->send(503); return; }
+        const String challenge = digestAuth.challenge();
+        if (!challenge.length()) { request->send(503); return; }
         AsyncWebServerResponse* response = request->beginResponse(401);
         if (!response) { request->send(503); return; }
-        response->addHeader("WWW-Authenticate", String("Digest realm=\"WThermostat\", qop=\"auth\", algorithm=MD5, charset=UTF-8, nonce=\"") + nonce + "\", opaque=\"" + opaque + "\"");
+        response->addHeader("WWW-Authenticate", challenge);
         request->send(response);
     }
 
@@ -1010,7 +1028,7 @@ public:
         const bool provisioning = isSoftAP() && (strlen(getSsid()) == 0 ||
             (wifiModeRunning == wnWifiMode::WIFIMODE_AP && strlen(getPassword()) == 0));
         if (!provisioning && !isLocalRecoveryRequest(request) && isAuthenticationRequired()) {
-            if (!request->authenticate("admin", getPassword())) {
+            if (!digestAuth.authenticate(request, getPassword())) {
                 requestAdminLogin(request);
                 return false;
             }
@@ -1118,6 +1136,7 @@ public:
 	}
 
 	void replyStaticHeader(AsyncWebServerRequest *request, AsyncWebServerResponse *response, bool gzip){
+        if (!response) { request->send(503); return; }
 		if (gzip) response->addHeader(HEADER_CT_ENCODING, HEADER_CT_ENCODING_GZ);
 		response->addHeader(HEADER_CACHECONTROL, HEADER_CACHECONTROL_900);
 		request->send(response);
@@ -1128,10 +1147,10 @@ public:
 		AsyncWebServerResponse *response = request->beginResponse(200, contentType, content, len);
 		replyStaticHeader(request, response, gzip);
 	}
-	void replyStatic(AsyncWebServerRequest *request, const String &contentType, PGM_P content, bool gzip=false){
-		AsyncWebServerResponse *response = request->beginResponse(200, contentType, content);		
-		replyStaticHeader(request, response, gzip);
-	}
+    void replyStatic(AsyncWebServerRequest *request, const String &contentType, PGM_P content, bool gzip=false) {
+        // The pointer-only overload creates a String copy, even for PROGMEM on ESP8266.
+        replyStatic(request, contentType, reinterpret_cast<const uint8_t*>(content), strlen_P(content), gzip);
+    }
 
 	void handleOnRoot(AsyncWebServerRequest *request){
 		String url=request->url();
@@ -1422,7 +1441,7 @@ private:
 									//Check, if it's only response to a state before
 									wlog->notice(F("Set several properties for device %s"), device->getId());
 									WJsonParser* parser = new WJsonParser();
-									if (parser->parse(payload, device) == nullptr) {
+									if (parser->parse(payloadS.c_str(), device) == nullptr) {
 										wlog->warning(F("No properties updated for device %s"), device->getId());
 									} else {
 										wlog->trace(F("One or more properties updated for device %s"), device->getId());
@@ -1552,43 +1571,52 @@ private:
 		}
 	}
 
+    void printHttpButton(WCheckedPrint* page, const char* path, WebRequestMethod method, const char* title) const {
+        page->format(HTTP_BUTTON_BEGIN, path, method == HTTP_POST ? "post" : "get");
+        if (method == HTTP_POST) page->format(HTTP_CSRF_INPUT, getCsrfToken());
+        page->format(HTTP_BUTTON_END, title);
+    }
+
 	void handleHttpRootRequest(AsyncWebServerRequest *request) {
 		wlog->notice(F("handleHttpRootRequest"));
 		if (isWebServerRunning()) {
 			if (restartFlag==nullptr) {			
-				AsyncResponseStream* page = httpHeader(request, "Home");
+				WCheckedPrint* page = httpHeader(request, "Home");
+            if (!page) return;
 				printHttpCaption(page);
 				WDevice *device = firstDevice;
                 page->print(F("<nav class='menu' aria-label='Device settings'>"));
-				page->printf_P(HTTP_BUTTON, "wifi", "get", PSTR("Configure Network"));
+				printHttpButton(page, "wifi", HTTP_GET, PSTR("Configure Network"));
 				while (device != nullptr) {
 					if (device->isProvidingConfigPage()) {
 						String s("Configure ");
 						s.concat(device->getName());
-						page->printf_P(HTTP_BUTTON, device->getId(), "get", s.c_str());
+						printHttpButton(page, device->getId(), HTTP_GET, s.c_str());
 						//page->printAndReplace(FPSTR(HTTP_BUTTON_DEVICE), device->getId(), device->getName());
 					}
 					WPage *subpage = device->firstPage;
 					while (subpage != nullptr) {
 						String url =(String)device->getId()+"_"+(String)subpage->getId();
-						page->printf_P(HTTP_BUTTON, url.c_str(), strcmp(subpage->getId(), "reinit") == 0 ? "post" : "get", subpage->getTitle());
+						printHttpButton(page, url.c_str(), strcmp(subpage->getId(), "reinit") == 0 ? HTTP_POST : HTTP_GET, subpage->getTitle());
 						subpage = subpage->next;
 					}
 					device = device->next;
 				}
-				page->printf_P(HTTP_BUTTON, "firmware", "get", PSTR("Update firmware"));
-				page->printf_P(HTTP_BUTTON, "info", "get", "Info");
-				page->printf_P(HTTP_BUTTON, "reset", "post", "Reboot");
+				printHttpButton(page, "firmware", HTTP_GET, PSTR("Update firmware"));
+				printHttpButton(page, "info", HTTP_GET, "Info");
+				printHttpButton(page, "reset", HTTP_POST, "Reboot");
                 page->print(F("</nav>"));
 				httpFooter(page);
-				request->send(page);
+				sendHttpPage(request, page);
 			} else {
-				AsyncResponseStream* page = httpHeader(request, "Info", F("<meta http-equiv=\"refresh\" content=\"10\">"));
+				WCheckedPrint* page = httpHeader(request, "Info");
+            if (!page) return;
 				page->print(restartFlag);
 				page->print(F("<br><br>"));
 				page->print(F("Module will reset in a few seconds..."));
+                page->print(FPSTR(HTTP_HOME_BUTTON));
 				httpFooter(page);
-				request->send(page);
+				sendHttpPage(request, page);
 			}
 		}
 	}
@@ -1596,34 +1624,37 @@ private:
 	void handleHttpDeviceConfiguration(AsyncWebServerRequest *request, WDevice *device) {
 		if (isWebServerRunning()) {
 			wlog->notice(F("Device config page"));
-			AsyncResponseStream* page = httpHeader(request, device->getName());
+			WCheckedPrint* page = httpHeader(request, device->getName());
+            if (!page) return;
 			printHttpCaption(page);
 			device->printConfigPage(request, page);
 			httpFooter(page);
-			request->send(page);
+			sendHttpPage(request, page);
 		}
 	}
 	void handleHttpDevicePage(AsyncWebServerRequest *request, WDevice *device, WPage *subpage) {
 		if (isWebServerRunning()) {
 			wlog->notice(F("Device subpage"));
 			// The schedules form fits here without cbuf's copy-before-free reallocations.
-			AsyncResponseStream* page = httpHeader(request, subpage->getTitle(), nullptr, 6144U);
+			WCheckedPrint* page = httpHeader(request, subpage->getTitle(), nullptr, 6144U);
+            if (!page) return;
 			printHttpCaption(page);
 			subpage->printPage(request, page);
 			httpFooter(page);
-			request->send(page);
+			sendHttpPage(request, page);
 					}
 	}
 
 	void handleHttpDevicePageSubmitted(AsyncWebServerRequest *request, WDevice *device, WPage *subpage) {
 		if (isWebServerRunning()) {
 			wlog->notice(F("handleHttpDevicePageSubmitted "), device->getId());
-			AsyncResponseStream* page = httpHeader(request, subpage->getTitle());
+			WCheckedPrint* page = httpHeader(request, subpage->getTitle());
+            if (!page) return;
 			printHttpCaption(page);
 			subpage->submittedPage(request, page);
-			page->printf_P(HTTP_HOME_BUTTON);
+			page->format(HTTP_HOME_BUTTON);
 			httpFooter(page);
-			request->send(page);
+			sendHttpPage(request, page);
 			wlog->notice(F("handleHttpDevicePageSubmitted Done"));
 		}
 	}
@@ -1640,60 +1671,62 @@ private:
 			if (wifiModeRunning == wnWifiMode_t::WIFIMODE_FALLBACK) this->apStartedAt=millis();
             if (recoveryApActive && request->client() && request->client()->localIP() == WiFi.softAPIP()) recoveryApStartedAt = millis();
 			wlog->notice(F("Network config page"));
-			AsyncResponseStream* page = httpHeader(request, F("Network Configuration"));
+            // Avoid cbuf's copy-before-free growth for the complete network form.
+			WCheckedPrint* page = httpHeader(request, F("Network Configuration"), nullptr, 6144U);
+            if (!page) return;
 			printHttpCaption(page);
-			page->printf_P(HTTP_CONFIG_PAGE_BEGIN, ID_NETWORK);
+            page->format(HTTP_CONFIG_PAGE_BEGIN, ID_NETWORK, getCsrfToken());
 
-			page->printf_P(HTTP_TEXT_FIELD, PSTR("Hostname:"), "i", 32, htmlEscapedString(getIdx()).c_str());
-			page->printf_P(HTTP_TEXT_FIELD, PSTR("WiFi SSID (only 2.4G, name is case sensitive):"), "s", 32, htmlEscapedString(getSsid()).c_str());
-			page->printf_P(HTTP_TEXT_FIELD, PSTR("AP BSSID (optional, AA:BB:CC:DD:EE:FF):"), "bssid", 17, getBssid().c_str());
+			page->format(HTTP_TEXT_FIELD, PSTR("Hostname:"), "i", 32, htmlEscapedString(getIdx()).c_str());
+			page->format(HTTP_TEXT_FIELD, PSTR("WiFi SSID (only 2.4G, name is case sensitive):"), "s", 32, htmlEscapedString(getSsid()).c_str());
+			page->format(HTTP_TEXT_FIELD, PSTR("AP BSSID (optional, AA:BB:CC:DD:EE:FF):"), "bssid", 17, getBssid().c_str());
             page->print(F("<p>Leave empty for automatic AP selection. With AP fallback enabled, a recovery AP opens after 2 minutes offline or a persistent static-IP gateway failure. A BSSID lock also enables offline recovery even if AP fallback is disabled. The WLAN connection stays locked to the selected AP.</p>"));
-			page->printf_P(HTTP_PASSWORD_FIELD, PSTR("WiFi password:"), "p", "p", 64, "", "p");
+			page->format(HTTP_PASSWORD_FIELD, PSTR("WiFi password:"), "p", "p", 64, "", "p");
             page->print(F("<input type='hidden' name='wifiPasswordMode' value='1'>"));
-            page->printf_P(HTTP_PAGE_CONFIGURATION_OPTION, "keepWifiPassword", (strlen(getPassword()) ? HTTP_CHECKED : ""), "", PSTR("Keep saved WiFi password"));
+            page->format(HTTP_PAGE_CONFIGURATION_OPTION, "keepWifiPassword", (strlen(getPassword()) ? HTTP_CHECKED : ""), "", PSTR("Keep saved WiFi password"));
             page->print(F("<p>To change the password, uncheck Keep saved WiFi password and enter the new value (8-63 bytes, or 64 hexadecimal digits).</p>"));
             page->print(F("<input type='hidden' name='authModePresent' value='1'>"));
-            page->printf_P(HTTP_PAGE_CONFIGURATION_OPTION, "authRequired", (isAuthenticationRequired() ? HTTP_CHECKED : ""),
+            page->format(HTTP_PAGE_CONFIGURATION_OPTION, "authRequired", (isAuthenticationRequired() ? HTTP_CHECKED : ""),
                 "", PSTR("Require administrator login (admin / WiFi password)"));
             page->print(F("<p>Use the thermostat WiFi setup buttons to open a local recovery AP for 5 minutes if you forget the login password. Settings are preserved.</p>"));
             page->print(F("<p>Login is required by default. If disabled, anyone who can reach this device can change settings or upload firmware. POST and browser form protections remain enabled.</p>"));
-			page->printf_P(HTTP_PAGE_CONFIGURATION_OPTION, "apfb", (this->isSupportingApFallback() ? HTTP_CHECKED : ""),
+			page->format(HTTP_PAGE_CONFIGURATION_OPTION, "apfb", (this->isSupportingApFallback() ? HTTP_CHECKED : ""),
 			"", HTTP_PAGE_CONFIIGURATION_OPTION_APFALLBACK);
 
             // Static IP
-            page->printf_P(HTTP_PAGE_CONFIGURATION_OPTION, "staticIpEnabled", (this->isStaticIpEnabled() ? HTTP_CHECKED : ""), 
+            page->format(HTTP_PAGE_CONFIGURATION_OPTION, "staticIpEnabled", (this->isStaticIpEnabled() ? HTTP_CHECKED : ""),
 				PSTR("id='staticIpEnabled' onclick='hideStaticIpGroup()'"), HTTP_PAGE_CONFIIGURATION_OPTION_STATIC_IP);
-            page->printf_P(HTTP_PAGE_CONFIGURATION_STATIC_IP_BEGIN, isStaticIpEnabled() ? "block" : "none");
-			page->printf_P(HTTP_TEXT_FIELD, PSTR("Static IP:"), "staticip", 15, htmlEscapedString(strlen(getStaticIp()) ? getStaticIp() : (!isSoftAP() ? ipToStr(WiFi.localIP()).c_str() : "")).c_str());
-			page->printf_P(HTTP_TEXT_FIELD, PSTR("Subnet Mask:"), "subnet", 15, htmlEscapedString(strlen(getStaticIp()) && strlen(getSubnetMask()) ? getSubnetMask() : (!isSoftAP() ? ipToStr(WiFi.subnetMask()).c_str() : "")).c_str());
-			page->printf_P(HTTP_TEXT_FIELD, PSTR("Gateway:"), "gateway", 15, htmlEscapedString(strlen(getGateway()) ? getGateway() : (!isSoftAP() ? ipToStr(WiFi.gatewayIP()).c_str() : "")).c_str());
-			page->printf_P(HTTP_TEXT_FIELD, PSTR("DNS1:"), "dns1", 15, htmlEscapedString(strlen(getDns1()) ? getDns1() : (!isSoftAP() ? ipToStr(WiFi.dnsIP(0)).c_str() : "")).c_str());
-			page->printf_P(HTTP_TEXT_FIELD, PSTR("DNS2:"), "dns2", 15, htmlEscapedString(strlen(getDns2()) ? getDns2() : (!isSoftAP() ? ipToStr(WiFi.dnsIP(1)).c_str() : "")).c_str());
-			page->printf_P(HTTP_PAGE_CONFIGURATION_STATIC_IP_END);
+            page->format(HTTP_PAGE_CONFIGURATION_STATIC_IP_BEGIN, isStaticIpEnabled() ? "block" : "none");
+			page->format(HTTP_TEXT_FIELD, PSTR("Static IP:"), "staticip", 15, htmlEscapedString(strlen(getStaticIp()) ? getStaticIp() : (!isSoftAP() ? ipToStr(WiFi.localIP()).c_str() : "")).c_str());
+			page->format(HTTP_TEXT_FIELD, PSTR("Subnet Mask:"), "subnet", 15, htmlEscapedString(strlen(getStaticIp()) && strlen(getSubnetMask()) ? getSubnetMask() : (!isSoftAP() ? ipToStr(WiFi.subnetMask()).c_str() : "")).c_str());
+			page->format(HTTP_TEXT_FIELD, PSTR("Gateway:"), "gateway", 15, htmlEscapedString(strlen(getGateway()) ? getGateway() : (!isSoftAP() ? ipToStr(WiFi.gatewayIP()).c_str() : "")).c_str());
+			page->format(HTTP_TEXT_FIELD, PSTR("DNS1:"), "dns1", 15, htmlEscapedString(strlen(getDns1()) ? getDns1() : (!isSoftAP() ? ipToStr(WiFi.dnsIP(0)).c_str() : "")).c_str());
+			page->format(HTTP_TEXT_FIELD, PSTR("DNS2:"), "dns2", 15, htmlEscapedString(strlen(getDns2()) ? getDns2() : (!isSoftAP() ? ipToStr(WiFi.dnsIP(1)).c_str() : "")).c_str());
+			page->format(HTTP_PAGE_CONFIGURATION_STATIC_IP_END);
 
 			//mqtt
-			page->printf_P(HTTP_PAGE_CONFIGURATION_OPTION, "mq", (this->isSupportingMqtt() ? HTTP_CHECKED : ""), 
+			page->format(HTTP_PAGE_CONFIGURATION_OPTION, "mq", (this->isSupportingMqtt() ? HTTP_CHECKED : ""),
 				PSTR("id='mqttEnabled' onclick='hideMqttGroup()'"), HTTP_PAGE_CONFIIGURATION_OPTION_MQTT);
-			page->printf_P(HTTP_PAGE_CONFIGURATION_MQTT_BEGIN, isSupportingMqtt() ? "block" : "none");
-			page->printf_P(HTTP_TEXT_FIELD, PSTR("MQTT Server:"), "ms", 32, htmlEscapedString(getMqttServer()).c_str());
-			page->printf_P(HTTP_TEXT_FIELD, PSTR("MQTT Port:"), "mo", 5, htmlEscapedString(getMqttPort()).c_str());
-			page->printf_P(HTTP_TEXT_FIELD, PSTR("MQTT User:"), "mu", 32, htmlEscapedString(getMqttUser()).c_str());
-			page->printf_P(HTTP_PASSWORD_FIELD, PSTR("MQTT Password:"), "mp", "mp", 64, "", "mp");
+			page->format(HTTP_PAGE_CONFIGURATION_MQTT_BEGIN, isSupportingMqtt() ? "block" : "none");
+			page->format(HTTP_TEXT_FIELD, PSTR("MQTT Server:"), "ms", 32, htmlEscapedString(getMqttServer()).c_str());
+			page->format(HTTP_TEXT_FIELD, PSTR("MQTT Port:"), "mo", 5, htmlEscapedString(getMqttPort()).c_str());
+			page->format(HTTP_TEXT_FIELD, PSTR("MQTT User:"), "mu", 32, htmlEscapedString(getMqttUser()).c_str());
+			page->format(HTTP_PASSWORD_FIELD, PSTR("MQTT Password:"), "mp", "mp", 64, "", "mp");
             page->print(F("<input type='hidden' name='mqttPasswordMode' value='1'>"));
-            page->printf_P(HTTP_PAGE_CONFIGURATION_OPTION, "keepMqttPassword", (strlen(getMqttPassword()) ? HTTP_CHECKED : ""), "", PSTR("Keep saved MQTT password"));
+            page->format(HTTP_PAGE_CONFIGURATION_OPTION, "keepMqttPassword", (strlen(getMqttPassword()) ? HTTP_CHECKED : ""), "", PSTR("Keep saved MQTT password"));
             page->print(F("<p>To change the password, uncheck Keep saved MQTT password and enter the new value.</p>"));
-			page->printf_P(HTTP_TEXT_FIELD, PSTR("Topic, e.g.'therm/room':"), "mt", 64, htmlEscapedString(getMqttTopic()).c_str());
+			page->format(HTTP_TEXT_FIELD, PSTR("Topic, e.g.'therm/room':"), "mt", 64, htmlEscapedString(getMqttTopic()).c_str());
 
-			page->printf_P(HTTP_PAGE_CONFIGURATION_OPTION, PSTR("mqhass"), (this->isSupportingMqttHASS() ? HTTP_CHECKED : ""),
+			page->format(HTTP_PAGE_CONFIGURATION_OPTION, PSTR("mqhass"), (this->isSupportingMqttHASS() ? HTTP_CHECKED : ""),
 				"", HTTP_PAGE_CONFIIGURATION_OPTION_MQTTHASS);
-			page->printf_P(HTTP_PAGE_CONFIGURATION_OPTION, PSTR("mqsv"), (this->isSupportingMqttSingleValues() ? HTTP_CHECKED : ""),
+			page->format(HTTP_PAGE_CONFIGURATION_OPTION, PSTR("mqsv"), (this->isSupportingMqttSingleValues() ? HTTP_CHECKED : ""),
 				"", HTTP_PAGE_CONFIIGURATION_OPTION_MQTTSINGLEVALUES);
 
-			page->printf_P(HTTP_PAGE_CONFIGURATION_MQTT_END);
-			page->printf_P(HTTP_CONFIG_SAVEANDREBOOT_BUTTON);
-			page->printf_P(HTTP_HOME_BUTTON);
+			page->format(HTTP_PAGE_CONFIGURATION_MQTT_END);
+			page->format(HTTP_CONFIG_SAVEANDREBOOT_BUTTON);
+			page->format(HTTP_HOME_BUTTON);
 			httpFooter(page);
-			request->send(page);
+			sendHttpPage(request, page);
 		}
 	}
 
@@ -1750,32 +1783,25 @@ private:
                 ? getValueOrEmpty(request, "keepMqttPassword") == "true" : getValueOrEmpty(request, "mp") == FORM_PW_NOCHANGE;
             const String mqttPassword = keepMqttPassword ? String(getMqttPassword()) : getValueOrEmpty(request, "mp");
             const String fullNetworkStrings[] = {getValueOrEmpty(request, "i"), getValueOrEmpty(request, "mu"), mqttPassword, topic};
-            if (!networkStrings.save(fullNetworkStrings)) {
-                request->send(500, CT_TEXT_PLAIN, "Failed to save network settings; existing values preserved"); return;
+            if (!settings->beginUpdate(true)) {
+                request->send(503, CT_TEXT_PLAIN, "Settings storage unavailable; no changes saved"); return;
             }
-            settings->writesEnabled = true;
-            if (request->hasParam("bssid", true) && !saveBssid(address, bssidValue.length() != 0)) {
-                request->send(500, CT_TEXT_PLAIN, "Failed to save AP BSSID"); return;
-            }
+            const bool extensionsStaged = networkStrings.save(fullNetworkStrings, true) &&
+                WWifiPassword::save(getValueOrEmpty(request, "s").c_str(), password, true) &&
+                (!request->hasParam("bssid", true) || saveBssid(address, bssidValue.length() != 0, true));
 #ifndef MINIMAL
-			// remove old autoconfiguration
-			sendMqttHassAutodiscover(true);
+            const String oldIdx = idx->c_str(), oldTopic = mqttBaseTopic->c_str();
+            const byte oldNetworkBits = settings->getByte(PROP_NETBITS1);
 #endif			
 			this->idx->setString(getValueOrEmpty(request, "i").c_str());
 			this->ssid->setString(getValueOrEmpty(request, "s").c_str());
 			settings->setString(PROP_PASSWORD, password.c_str());
-            if (!WWifiPassword::save(getSsid(), password)) {
-                request->send(500, CT_TEXT_PLAIN, "Failed to save WiFi password; reconnect through local recovery if needed"); return;
-            }
-            extendedWifiPassword = password.length() > 32 ? password : String();
 			settings->setString(PROP_MQTTSERVER, getValueOrEmpty(request, "ms").c_str());
 			String mqtt_port = getValueOrEmpty(request, "mo");
 			settings->setString(PROP_MQTTPORT, (mqtt_port != "" ? mqtt_port.c_str() : "1883"));
 			settings->setString(PROP_MQTTUSER, getValueOrEmpty(request, "mu").c_str());
 			settings->setString(PROP_MQTTPASSWORD, mqttPassword.c_str());
 			this->mqttBaseTopic->setString(getValueOrEmpty(request, "mt").c_str());
-            const char* legacyStrings[] = {idx->c_str(), settings->getString(PROP_MQTTUSER), settings->getString(PROP_MQTTPASSWORD), mqttBaseTopic->c_str()};
-            networkStrings.loadAndMigrate(legacyStrings, nullptr);
 			byte nb1 = NETBITS1_RECOVERY_MIGRATED;
 			if (getValueOrEmpty(request, "mq").equals("true")) nb1 |= NETBITS1_MQTT;
 			if (getValueOrEmpty(request, "mqhass").equals("true")) nb1 |= NETBITS1_HASS;
@@ -1794,7 +1820,24 @@ private:
             settings->setString(PROP_DNS1, getValueOrEmpty(request, "dns1").c_str());
             settings->setString(PROP_DNS2, getValueOrEmpty(request, "dns2").c_str());
 
-			settings->save(); 
+            if (!settings->endUpdate(extensionsStaged)) {
+                request->send(500, CT_TEXT_PLAIN, "Failed to save settings; changes not applied. Check storage before rebooting."); return;
+            }
+#ifndef MINIMAL
+            settings->writesEnabled = false;
+            // Discovery removal must use the previous identity, and only follow a successful save.
+            const String newIdx = idx->c_str(), newTopic = mqttBaseTopic->c_str();
+            idx->setString(oldIdx.c_str()); mqttBaseTopic->setString(oldTopic.c_str());
+            settings->setByte(PROP_NETBITS1, oldNetworkBits);
+            sendMqttHassAutodiscover(true);
+            idx->setString(newIdx.c_str()); mqttBaseTopic->setString(newTopic.c_str());
+            settings->setByte(PROP_NETBITS1, nb1);
+            settings->writesEnabled = true;
+#endif
+            extendedWifiPassword = password.length() > 32 ? password : String();
+            const char* legacyStrings[] = {idx->c_str(), settings->getString(PROP_MQTTUSER), settings->getString(PROP_MQTTPASSWORD), mqttBaseTopic->c_str()};
+            networkStrings.loadAndMigrate(legacyStrings, nullptr);
+
 			this->restart(request, F("Settings saved."));
 			// we must not here this->supportingMqtt -> if it _was_ disabled and we're going to enable it here
 			// mqtt would not be initialized but would be used immediately
@@ -1805,9 +1848,12 @@ private:
 		if (isWebServerRunning()) {
             if (!settings->writesEnabled) { request->send(503, CT_TEXT_PLAIN, "Settings storage unavailable; network migration must succeed before saving"); return; }
 			wlog->notice(F("handleHttpSaveDeviceConfiguration "), device->getId());
-			device->saveConfigPage(request);
-            if (request->isSent()) return;
-			settings->save();
+            if (!settings->beginUpdate()) { request->send(503); return; }
+            device->saveConfigPage(request);
+            const bool valid = !request->isSent();
+            const bool saved = settings->endUpdate(valid);
+            if (!valid) return;
+            if (!saved) { request->send(500, CT_TEXT_PLAIN, "Failed to save device settings; changes not applied"); return; }
 			if (device->isConfigNeedsReboot()){
 				wlog->notice(F("Reboot"));
 				this->restart(request, F("Device settings saved."));
@@ -1820,7 +1866,8 @@ private:
 
 	void handleHttpInfo(AsyncWebServerRequest *request) {
 		if (isWebServerRunning()) {
-			AsyncResponseStream* page = httpHeader(request, "Info");
+			WCheckedPrint* page = httpHeader(request, "Info");
+            if (!page) return;
 			printHttpCaption(page);
 			page->print(F("<table><caption>Device diagnostics</caption><tbody>"));
 			// header
@@ -1892,6 +1939,13 @@ private:
 			page->print(ESP.getHeapFragmentation());
 			page->print(" %");
 			htmlTableRowEnd(page);
+
+            htmlTableRowTitle(page, F("Reset reason:"));
+            page->print(htmlEscapedString(ESP.getResetReason().c_str()));
+            htmlTableRowEnd(page);
+            htmlTableRowTitle(page, F("Reset details:"));
+            page->print(htmlEscapedString(ESP.getResetInfo().c_str()));
+            htmlTableRowEnd(page);
 			
 			htmlTableRowTitle(page, F("Uptime:"));
 			unsigned long secs=millis()/1000;
@@ -1901,7 +1955,7 @@ private:
 			secs -= hours * (60UL * 60);
 			unsigned int minutes = secs / 60;
 			secs -= minutes * 60UL;
-			page->printf_P("%ud, %uh, %um, %lus",
+			page->format("%ud, %uh, %um, %lus",
 			days, hours, minutes, secs);
 			htmlTableRowEnd(page);
 
@@ -1918,7 +1972,7 @@ private:
 			page->print(F("</tbody></table>"));
 			page->print(FPSTR(HTTP_HOME_BUTTON));
 			httpFooter(page);
-			request->send(page);
+			sendHttpPage(request, page);
 		}
 	}
 
@@ -1929,7 +1983,7 @@ private:
 		}
 	}
 
-	void printHttpCaption(AsyncResponseStream* page) {
+	void printHttpCaption(WCheckedPrint* page) {
 		page->print(F("<p class='identity'><strong>"));
 		page->print(htmlEscapedString(applicationName.c_str()));
 		page->print(F("</strong> "));
@@ -1944,29 +1998,50 @@ private:
 
 	}
 
-	template<class T, typename ... Args> AsyncResponseStream * httpHeader(AsyncWebServerRequest *request, T title, const __FlashStringHelper * HeaderAdditional, size_t bufferSize = 3096U) {
-		if (!isWebServerRunning()) return nullptr;
-		AsyncResponseStream* const page = request->beginResponseStream(CT_TEXT_HTML, bufferSize);
+	template<class T, typename ... Args> WCheckedPrint * httpHeader(AsyncWebServerRequest *request, T title, const __FlashStringHelper * HeaderAdditional, size_t bufferSize = 3096U) {
+        if (!isWebServerRunning()) return nullptr;
+        // Authentication/origin checks are complete; HTML renderers need no headers.
+        request->removeHeaders();
+        // Page blocks need total capacity, not one contiguous allocation for the whole page.
+        const size_t freeHeap = ESP.getFreeHeap();
+        const size_t reserve = 8192U;
+        if (ESP.getMaxFreeBlockSize() < 1024U || freeHeap < reserve || bufferSize > freeHeap - reserve) { request->send(503); return nullptr; }
+        WPageResponse* const response = new (std::nothrow) WPageResponse(CT_TEXT_HTML);
+        if (!response) { request->send(503); return nullptr; }
+        WCheckedPrint* const page = new (std::nothrow) WCheckedPrint(response);
+        if (!page) { delete response; request->send(503); return nullptr; }
         const String escapedTitle = htmlEscapedString(String(title).c_str());
-		page->printf_P(HTTP_HEAD_BEGIN, htmlEscapedString(getIdx()).c_str(), escapedTitle.c_str());
-		page->printf_P(HTTP_HEAD_SCRIPT, getFirmwareVersion().c_str());
-		page->printf_P(HTTP_HEAD_STYLE, getFirmwareVersion().c_str());
+		page->format(HTTP_HEAD_BEGIN, htmlEscapedString(getIdx()).c_str(), escapedTitle.c_str());
+		page->format(HTTP_HEAD_SCRIPT, getFirmwareVersion().c_str());
+		page->format(HTTP_HEAD_STYLE, getFirmwareVersion().c_str());
 		if (HeaderAdditional!=nullptr) page->print(FPSTR(HeaderAdditional));
-        page->printf("<script>window.csrfToken='%s';</script>", csrfToken.c_str());
 		page->print(FPSTR(HTTP_HEAD_END));
-        page->printf_P("<h1>%s</h1>", escapedTitle.c_str());
-        page->addHeader("Cache-Control", "no-store");
+        page->format("<h1>%s</h1>", escapedTitle.c_str());
+        response->addHeader("Cache-Control", "no-store");
+        if (!page->ok()) { sendHttpPage(request, page); return nullptr; }
 		return page;
 	}
 
-	template<class T, typename ... Args> AsyncResponseStream * httpHeader(AsyncWebServerRequest *request, T title) {
+	template<class T, typename ... Args> WCheckedPrint * httpHeader(AsyncWebServerRequest *request, T title) {
 		return httpHeader(request, title, NULL); 
 	}
 
-	void httpFooter(AsyncResponseStream  *page) {
+	void httpFooter(WCheckedPrint  *page) {
 		if (!isWebServerRunning()) return;
 		page->print(FPSTR(HTTP_BODY_END));
 	}
+
+    static void sendHttpPage(AsyncWebServerRequest* request, WCheckedPrint* page) {
+        auto* response = static_cast<WPageResponse*>(page->getTarget());
+        const bool complete = page->ok();
+        delete page;
+        if (!complete) {
+            delete response;
+            request->send(503, CT_TEXT_PLAIN, "Not enough memory to build this page. Close Live WebLog or other device tabs and retry.");
+            return;
+        }
+        request->send(response);
+    }
 
 
 	String getClientName(bool lowerCase) {
@@ -1997,16 +2072,17 @@ private:
 
 	void handleHttpFirmwareUpdate(AsyncWebServerRequest *request) {
 		if (isWebServerRunning()) {
-			AsyncResponseStream* page = httpHeader(request, F("Firmware update"));
+			WCheckedPrint* page = httpHeader(request, F("Firmware update"));
+            if (!page) return;
 			printHttpCaption(page);
-			page->printf_P(HTTP_FORM_FIRMWARE);
+			page->format(HTTP_FORM_FIRMWARE, getCsrfToken());
             page->print(F("<p>Maximum OTA upload: "));
             const uint32_t freeSpace = ESP.getFreeSketchSpace();
 			page->print(freeSpace > 4096 ? (freeSpace - 4096) & 0xfffff000 : 0);
 			page->print(STR_BYTE);
             page->print(F(". Keep power connected during the update.</p>"));
 			httpFooter(page);
-			request->send(page);
+			sendHttpPage(request, page);
 		}
 	}
 
@@ -2050,12 +2126,13 @@ private:
 	}
 
 	void webReturnStatusPage(AsyncWebServerRequest *request, const __FlashStringHelper* reasonMessage1, const char* reasonMessage2) {
-		AsyncResponseStream* page = httpHeader(request, reasonMessage1);
+		WCheckedPrint* page = httpHeader(request, reasonMessage1);
+            if (!page) return;
 		printHttpCaption(page);
-		page->printf_P(HTTP_SAVED, reinterpret_cast<const char*>(reasonMessage1), reasonMessage2);
-		page->printf_P(HTTP_HOME_BUTTON);
+		page->format(HTTP_SAVED, reinterpret_cast<const char*>(reasonMessage1), reasonMessage2);
+		page->format(HTTP_HOME_BUTTON);
 		httpFooter(page);
-		request->send(page);
+		sendHttpPage(request, page);
 	}
 	
 	void restart(AsyncWebServerRequest *request, const __FlashStringHelper* reasonMessage) {
@@ -2277,19 +2354,23 @@ private:
 #endif
 	
 
-	void getPropertyValue(AsyncWebServerRequest *request, WProperty *property) {
-		WStringStream* responseStreamWeb = new WStringStream(512);
-		WJson json(responseStreamWeb);
-		json.beginObject();
-		property->toJsonValue(&json);
-		json.endObject();
-		property->setRequested(true);
-		//wlog->trace(F("getPropertyValue %s (%d)"), responseStreamWeb->c_str(), ESP.getMaxFreeBlockSize());
-		//request->send_P(200, APPLICATION_JSON, (const uint8_t*)responseStreamWeb->c_str(), strlen(responseStreamWeb->c_str()));
-		request->send(200, APPLICATION_JSON, responseStreamWeb->c_str());
-		//wlog->trace(F("sent %s (%d)"), responseStreamWeb->c_str(), ESP.getMaxFreeBlockSize());
-		delete responseStreamWeb;
-	}
+    template<class Serializer>
+    static void sendJson(AsyncWebServerRequest* request, Serializer serialize) {
+        AsyncResponseStream* response = request->beginResponseStream(APPLICATION_JSON);
+        if (!response) { request->send(503); return; }
+        WCheckedPrint output(response);
+        WJson json(&output);
+        serialize(json);
+        if (!output.ok()) { delete response; request->send(503); return; }
+        request->send(response);
+    }
+
+    void getPropertyValue(AsyncWebServerRequest* request, WProperty* property) {
+        sendJson(request, [&](WJson& json) {
+            json.beginObject(); property->toJsonValue(&json); json.endObject();
+        });
+        property->setRequested(true);
+    }
 
 /* can be tested with:
    curl -H 'Content-Type: application/json' -X PUT -d '{"targetTemperature":24.5}' http://10.10.200.113/things/thermostat/properties/targetTemperature
@@ -2300,12 +2381,11 @@ private:
         WJsonParser parser;
         WProperty* property = parser.parse(body->data, device);
         if (!parser.isValid()) { request->send(400, APPLICATION_JSON, "{\"error\":\"Invalid properties\"}"); return; }
-        WStringStream response(512);
-        WJson json(&response);
-        json.beginObject();
-        if (property) property->toJsonValue(&json);
-        json.endObject();
-        request->send(200, APPLICATION_JSON, response.c_str());
+        sendJson(request, [&](WJson& json) {
+            json.beginObject();
+            if (property) property->toJsonValue(&json);
+            json.endObject();
+        });
     }
 
 	WDevice* getDeviceById(const char* deviceId) {
@@ -2319,54 +2399,44 @@ private:
 		return nullptr;
 	}
 
-	void sendDevicesStructure(AsyncWebServerRequest* request) {
-		wlog->verbose(F("Send description for all devices..."));
-		WStringStream* responseStreamWeb = new WStringStream(3096);
-		WJson json(responseStreamWeb);
-		json.beginArray();
-		WDevice *device = this->firstDevice;
-		while (device != nullptr) {
-			if (device->isVisible(WEBTHING)) {
-				device->toJsonStructure(&json, URI_THINGS, WEBTHING);
-			}
-			device = device->next;
-		}
-		json.endArray();
-		request->send(200, APPLICATION_JSON, responseStreamWeb->c_str());
-		delete responseStreamWeb;
-	}
+    void sendDevicesStructure(AsyncWebServerRequest* request) const {
+        sendJson(request, [&](WJson& json) {
+            json.beginArray();
+            for (WDevice* device = firstDevice; device; device = device->next)
+                if (device->isVisible(WEBTHING)) device->toJsonStructure(&json, URI_THINGS, WEBTHING);
+            json.endArray();
+        });
+    }
 
-	void sendDeviceStructure(AsyncWebServerRequest *request, WDevice *device) {
-		wlog->verbose(F("Send description for device: %s"), device->getId());
-		WStringStream* responseStreamWeb = new WStringStream(2048);
-		WJson json(responseStreamWeb);
-		device->toJsonStructure(&json, URI_THINGS, WEBTHING);
-		request->send(200, APPLICATION_JSON, responseStreamWeb->c_str());
-		delete responseStreamWeb;
-	}
+    static void sendDeviceStructure(AsyncWebServerRequest* request, WDevice* device) {
+        sendJson(request, [&](WJson& json) { device->toJsonStructure(&json, URI_THINGS, WEBTHING); });
+    }
 
-	void sendDeviceValues(AsyncWebServerRequest *request, WDevice *device) {
-		wlog->notice(F("Send all properties for device: %s"), device->getId());
-		WStringStream* responseStreamWeb = new WStringStream(512);
-		WJson json(responseStreamWeb);
-		json.beginObject();
-		if (device->isMainDevice()) {
-			json.propertyString(PROP_IDX, getIdx());
-			json.propertyString("ip", getDeviceIp().toString().c_str());
-			json.propertyString("firmware", firmwareVersion.c_str());
-		}
-		device->toJsonValues(&json, WEBTHING);
-		json.endObject();
-		request->send(200, APPLICATION_JSON, responseStreamWeb->c_str());
-		delete responseStreamWeb;
-	}
+    void sendDeviceValues(AsyncWebServerRequest* request, WDevice* device) {
+        sendJson(request, [&](WJson& json) {
+            json.beginObject();
+            if (device->isMainDevice()) {
+                json.propertyString(PROP_IDX, getIdx());
+                json.propertyString("ip", getDeviceIp().toString().c_str());
+                json.propertyString("firmware", firmwareVersion.c_str());
+            }
+            device->toJsonValues(&json, WEBTHING);
+            json.endObject();
+        });
+    }
+
 	bool checkAndLogWebAccess(AsyncWebServerRequest *request){
 		if (!request->url().startsWith(URI_THINGS)){
 			//avoid crash on webthings parallel requests
 			wlog->notice(F("Serving: '%s' method %s to %s, maxFree: %d"), request->url().c_str(), request->methodToString(),
 			request->client()->remoteIP().toString().c_str(), ESP.getMaxFreeBlockSize());
 		}
-		if (ESP.getMaxFreeBlockSize()<(5*1024) && !request->url().equals(URI_RESET)){
+        // Segmented HTML tolerates fragmentation; JSON still needs a contiguous buffer.
+        const String& url = request->url();
+        const bool flash = url == URI_CSS || url == URI_JS || url == URI_FAVICON;
+        const size_t contiguous = url.startsWith(URI_THINGS) ? 5120U : 1024U;
+        const size_t total = flash ? 1024U : 5120U;
+        if ((ESP.getMaxFreeBlockSize() < contiguous || ESP.getFreeHeap() < total) && !url.equals(URI_RESET)){
 			//wlog->notice(F("Dropping Request with 503 Busy"));
 			request->send(503); // BUSY
 			return false;

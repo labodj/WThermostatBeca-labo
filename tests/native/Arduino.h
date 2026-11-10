@@ -19,9 +19,11 @@ using boolean = bool;
 #define DEC 10
 #define PSTR(s) (s)
 #define snprintf_P snprintf
+#define strlen_P strlen
 #define pgm_read_byte(p) (*(p))
 struct __FlashStringHelper {};
 using PGM_P = const char*;
+#define vsnprintf_P vsnprintf
 #define F(s) reinterpret_cast<const __FlashStringHelper*>(s)
 #define FPSTR(s) F(s)
 inline unsigned long testMillis = 0;
@@ -32,6 +34,8 @@ template<class T, class L, class H> T constrain(T value,L low,H high) { return s
 class String : public std::string {
 public:
     using std::string::string;
+    String(char value):std::string(1,value){}
+    int indexOf(char value, size_t start=0) const {auto p=find(value,start);return p==npos?-1:static_cast<int>(p);}
     String(std::string value) : std::string(value) {}
     String(const __FlashStringHelper* value) : std::string(reinterpret_cast<const char*>(value)) {}
     String(int value, int base = 10) { char b[64]; snprintf(b,sizeof(b),base==16?"%x":"%d",value); assign(b); }
@@ -56,6 +60,8 @@ public:
     void replace(const char* oldValue,const char* newValue){size_t p=0;while((p=find(oldValue,p))!=npos){std::string::replace(p,strlen(oldValue),newValue);p+=strlen(newValue);}}
     void concat(String value){append(value);}
 };
+inline String operator+(const String& a,char b){String r=a;r.push_back(b);return r;}
+inline String operator+(char a,const String& b){String r(a);r+=b;return r;}
 inline String operator+(const char* a,const String& b){return std::string(a)+std::string(b);}
 inline String operator+(const String& a,const char* b){return std::string(a)+b;}
 inline String operator+(const String& a,const String& b){return std::string(a)+std::string(b);}

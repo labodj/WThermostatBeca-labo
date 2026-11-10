@@ -19,7 +19,7 @@ public:
         this->setMqttRetain(true);
         this->setVisibility(MQTT);
 
-        lastLongLoop = lastVeryLongLoop = 0;
+
 		
         /* properties */
         this->rssi = new WProperty("rssi", "rssi", INTEGER);
@@ -31,25 +31,13 @@ public:
     
     }
 
-    virtual void printConfigPage(AsyncWebServerRequest *request, AsyncResponseStream* page) override {
+    virtual void printConfigPage(AsyncWebServerRequest *request, WCheckedPrint* page) override {
 
     }
     void saveConfigPage(AsyncWebServerRequest* request) override {
 
     }
 
-    void loop(unsigned long now) override {
-        // to tasks only every second
-        if (lastLongLoop + 1000 < now ){
-            lastLongLoop=now;
-        }
-        // to tasks only every 30 seconds
-        if (lastVeryLongLoop + 30000 < now ){
-            lastVeryLongLoop=now;
-        }
-
-        // properties are getting read during stateNotify
-    }
 
     void handleUnknownMqttCallback(const String&, const String&, const String&, unsigned int) override {}
 
@@ -64,7 +52,7 @@ public:
 
 private:
     WProperty* rssi;
-    unsigned long lastLongLoop, lastVeryLongLoop;
+
 };
 
 

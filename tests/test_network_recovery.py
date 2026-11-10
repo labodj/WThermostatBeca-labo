@@ -11,6 +11,7 @@ class NetworkRecoveryTests(unittest.TestCase):
     def test_digest_challenge_charset_and_failed_randomness(self):
         source = r'''
 #include "Arduino.h"
+#include "lib/WAdapter/WAdapter/WDigestAuth.h"
 String randomHash="01234567890123456789012345678901";
 String genRandomMD5(){return randomHash;}
 struct AsyncWebServerResponse{String header;void addHeader(const char* name,const String& value){assert(!strcmp(name,"WWW-Authenticate"));header=value;}};
@@ -20,6 +21,7 @@ struct AsyncWebServerRequest{
  void send(int code){status=code;}void send(AsyncWebServerResponse*r){assert(r==&response);}
 };
 struct Probe{
+ WDigestAuth digestAuth;
 ''' + method(NETWORK, 'requestAdminLogin') + r'''
 };
 int main(){Probe p;AsyncWebServerRequest r;p.requestAdminLogin(&r);
@@ -36,4 +38,4 @@ int main(){Probe p;AsyncWebServerRequest r;p.requestAdminLogin(&r);
         self.assertIn('becaDevice->setOnConfigurationRequest([]() {\n        network->startLocalRecovery();', main)
         self.assertEqual(1, main.count('startLocalRecovery();'))
         self.assertNotIn('startLocalRecovery', method(NETWORK, 'updateWifiRecovery'))
-        self.assertLess(main.index('network->migrateRecoverySettings();'), main.index('network->getSettings()->save();'))
+        self.assertLess(main.index('network->migrateRecoverySettings();'), main.index('network->getSettings()->save()'))

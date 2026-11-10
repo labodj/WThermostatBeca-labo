@@ -7,6 +7,28 @@ Local-control firmware for compatible **ESP8266 Beca/Moes/Qiumi Wi-Fi thermostat
 [![Build](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml/badge.svg)](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml)
 [![Latest stable release](https://img.shields.io/github/v/release/labodj/WThermostatBeca-labo)](https://github.com/labodj/WThermostatBeca-labo/releases)
 
+## Unreleased changes
+
+The working source includes fixes beyond the stable release linked above:
+
+- Digest challenges are tied to this boot, expire after five minutes, and reject reused counters and mismatched request targets. A small replay window allows parallel browser requests and repeated callbacks within one upload.
+- Network forms save legacy fields, BSSID and long credentials in one checked EEPROM commit. Device forms also batch their writes. Failed commits return an error without scheduling a reboot and restore the previous in-memory settings.
+- MQTT JSON commands remain intact when MQTT logging publishes from the command callback. Known values are validated before applying a batch, including fields that may become writable when ECO changes.
+- WebThings JSON responses stream with checked writes; allocation failures or responses above 8 KiB return HTTP 503 rather than a truncated HTTP 200 response. BAC state descriptions include cooling/fan states; BHT descriptions remain heating-only.
+- DST offsets are checked each clock tick, even if the loop misses the exact transition second. Periodic state publication also survives the roughly 49.7-day millisecond-counter rollover.
+- Flash-format logging avoids an extra 256-byte stack buffer; unused network timers are removed.
+- CSS and JavaScript are served directly from flash. HTML response creation checks its actual buffer size and memory reserve before allocation, and handles unavailable response objects.
+- HTML pages also use checked formatting and writes: an incomplete form is discarded and returns HTTP 503. HTML pages use bounded 256-byte blocks and release consumed blocks while sending, avoiding large contiguous allocations and copy-before-free growth on fragmented heaps. Live WebLog queues are limited to four messages; messages are skipped while memory is low or a browser cannot keep up. MQTT logging remains independent.
+- HTTP header parsing checks memory before allocating header storage. HTML pages release validated request headers and preserve RAM for TCP, preventing the low-memory crash reproduced with WebLog and concurrent page loads. When several large transfers exceed available memory, the device can return HTTP 503; retry after the other transfer finishes.
+- POST forms include their protection token in the server-generated HTML, so saving does not depend on JavaScript loading. Flash-backed assets use a 1 KiB admission reserve for response objects and headers; their checked transport buffers can wait for memory to become available.
+- HTTP responses retain pending bytes until TCP accepts them. The server dependency is pinned to the [upstream premature-close fix](https://github.com/ESP32Async/ESPAsyncWebServer/commit/c764160d875a7a97a2d9463edff90b8a705a89df); regression tests force partial writes, including one byte at a time. The global WebLog handler is registered without transferring its ownership to the server. The pinned web server fork explicitly copies temporary HTTP and handshake buffers into ESP8266 TCP storage, keeping retransmissions valid after the response releases its buffers. Empty TCP outputs remain pollable, so a temporary send-buffer allocation failure can recover instead of waiting for a nonexistent ACK.
+
+ESPAsyncWebServer is pinned to the [labodj integration branch](https://github.com/labodj/ESPAsyncWebServer/tree/codex/firmware-integration), based on upstream commit `340c93fb108451022a8791e8be295e7b181cf9f4`. It includes the independent fixes proposed in upstream PRs [#509](https://github.com/ESP32Async/ESPAsyncWebServer/pull/509) and [#510](https://github.com/ESP32Async/ESPAsyncWebServer/pull/510), plus the ESP8266 guard before STL header allocation. Upstream allocation checks and the static 100 Continue response are retained.
+
+The common JavaScript is 504 bytes (previously 1,363): protection tokens come from the server, and unused helpers have been removed. Transport fixes live in versioned library forks with regression tests; experimental TCP counters and snapshots are removed. Table headings and buttons use explicit semantics, and restart status pages offer manual navigation instead of a timed refresh.
+
+Stored offsets, device IDs, discovery IDs and existing configuration choices are retained. These changes are not included in the published stable binaries yet. After a reported write failure, autosaves are blocked until a complete Network Configuration save succeeds. A single-sector EEPROM commit is **not power-loss atomic**: keep power connected during saves, and investigate a storage error before rebooting or retrying. Tests simulate write failures; they cannot prove physical flash reliability.
+
 ## Get the firmware
 
 | File in the release | Purpose |
@@ -118,6 +140,8 @@ For unattended use, supply `WTHERMOSTAT_PASSWORD` through an appropriate protect
 
 In **Network Configuration**, leave **AP BSSID** empty for automatic AP selection, or enter a unicast MAC such as `02:11:22:33:44:55` to select one AP. The lock applies to initial connection and reconnections. The channel remains automatic, so that AP can change channel. BSSID selection is not an authentication boundary.
 
+SDK autoconnection is disabled before station startup; automatic reconnection is enabled after the saved credentials and BSSID are passed to Wi-Fi. While connected, the firmware also checks the BSSID reported by the SDK and reconnects if it differs from the saved lock. This check is deferred during OTA uploads.
+
 Since v1.25.0-labo.5, **AP fallback is enabled once on migration**, including configurations imported from fashberg and earlier labo releases. Subsequent changes to that option are retained. Existing network, MQTT, clock, thermostat and schedule settings are preserved. No recovery AP opens on a healthy startup.
 
 With AP fallback enabled, a recovery AP opens after **120 seconds continuously offline**. A BSSID lock enables this offline recovery even if the fallback checkbox is off. Reconnection attempts continue alongside the AP and always retain the configured BSSID. An automatic recovery AP still requires administrator login when enabled.
@@ -215,6 +239,10 @@ These screenshots show earlier labo builds. The current Network Configuration pa
 
 ## Build and test
 
+The ESP8266 TCP dependency is the minimal [labodj/ESPAsyncTCP maintenance fork](https://github.com/labodj/ESPAsyncTCP), pinned to a full commit SHA. Its lifetime, accepted-byte and pending-output fixes are tested in that repository. ESPAsyncWebServer is also pinned to a full commit SHA in the integration fork. Builds do not patch either dependency.
+
+Digest and HTTP transport integration tests require the pinned ESPAsyncWebServer sources, installed by the commands below. They exercise its Digest verifier and actual send-buffer code, including partial TCP writes and retrying data sources.
+
 The validated development host is **Linux x86_64, Python 3.14.10**, with g++/ASan/UBSan, Node.js for JavaScript checks, and PlatformIO **6.2.0**. Other hosts need a compatible toolchain override in `platformio_override.ini`. WAdapter is already included in the repository; no submodule initialization is required.
 
 ```sh
@@ -223,6 +251,7 @@ cd WThermostatBeca-labo
 python3.14 -m venv .venv
 . .venv/bin/activate
 python -m pip install -r requirements-dev.txt
+pio pkg install -e wthermostat
 python -m unittest discover -s tests -v
 pio run -e wthermostat
 ```

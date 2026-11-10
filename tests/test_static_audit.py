@@ -1,9 +1,9 @@
 """Behavioral regressions for the cross-analyzer audit."""
 import importlib.util
-from pathlib import Path
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import test_analysis_tool
@@ -103,31 +103,35 @@ int main(){
 
     def test_http_headers_remain_with_their_request_on_reentry(self):
         text = native.NETWORK.read_text()
-        start = text.index('\ttemplate<class T, typename ... Args> AsyncResponseStream * httpHeader')
-        end = text.index('\n\ttemplate<class T, typename ... Args> AsyncResponseStream * httpHeader', start + 1)
+        start = text.index('\ttemplate<class T, typename ... Args> WCheckedPrint * httpHeader')
+        end = text.index('\n\ttemplate<class T, typename ... Args> WCheckedPrint * httpHeader', start + 1)
         source = r'''
 #include "Arduino.h"
 #include "Stream.h"
+#include "lib/WAdapter/WAdapter/WCheckedPrint.h"
 const char* CT_TEXT_HTML="text/html",*HTTP_HEAD_BEGIN="%s:%s;",*HTTP_HEAD_SCRIPT="script:%s;",*HTTP_HEAD_STYLE="style:%s;",*HTTP_HEAD_END="end;";
 String htmlEscapedString(const char* value){return value;}
-struct AsyncResponseStream:Print{
- std::string body;std::function<void()>hook;
- size_t write(uint8_t c)override{body+=static_cast<char>(c);if(hook){auto next=std::move(hook);hook=nullptr;next();}return 1;}
- void addHeader(const char*,const char*){}
-};
-struct AsyncWebServerRequest{AsyncResponseStream response;
- AsyncResponseStream*beginResponseStream(const char*,unsigned){return &response;}};
-struct Probe{String csrfToken="token";AsyncResponseStream*page=nullptr;
+#include "lib/WAdapter/WAdapter/WPageResponse.h"
+std::function<void()> allocationHook;
+void*operator new(size_t size,const std::nothrow_t&)noexcept{
+ if(allocationHook){auto hook=std::move(allocationHook);allocationHook=nullptr;hook();}
+ return ::operator new(size);
+}
+struct AsyncWebServerRequest{void removeHeaders(){}void send(int){assert(false);}};
+struct Chip{unsigned getMaxFreeBlockSize(){return 24000;}unsigned getFreeHeap(){return 24000;}}ESP;
+struct Probe{String csrfToken="token";
+ static void sendHttpPage(AsyncWebServerRequest*,WCheckedPrint*){assert(false);}
  bool isWebServerRunning(){return true;}const char*getIdx(){return "room";}String getFirmwareVersion(){return "test";}
 '''+text[start:end]+r'''
 };
-int main(){Probe p;AsyncWebServerRequest first,second;
- first.response.hook=[&](){assert(p.httpHeader(&second,"second",nullptr)==&second.response);};
- assert(p.httpHeader(&first,"first",nullptr)==&first.response);
- assert(first.response.body.find("<h1>first</h1>")!=std::string::npos);
- assert(first.response.body.find("second")==std::string::npos);
- assert(second.response.body.find("<h1>second</h1>")!=std::string::npos);
- assert(second.response.body.find("first")==std::string::npos);
+std::string drain(WCheckedPrint*page){auto*r=static_cast<WPageResponse*>(page->getTarget());delete page;uint8_t data[256];std::string out;
+ while(size_t size=r->_fillBuffer(data,sizeof(data)))out.append(reinterpret_cast<char*>(data),size);delete r;return out;}
+int main(){Probe p;AsyncWebServerRequest first,second;WCheckedPrint*inner=nullptr;
+ allocationHook=[&](){inner=p.httpHeader(&second,"second",nullptr);};
+ auto*outer=p.httpHeader(&first,"first",nullptr);assert(outer&&inner&&outer->getTarget()!=inner->getTarget());
+ const auto firstBody=drain(outer),secondBody=drain(inner);
+ assert(firstBody.find("<h1>first</h1>")!=std::string::npos&&firstBody.find("second")==std::string::npos);
+ assert(secondBody.find("<h1>second</h1>")!=std::string::npos&&secondBody.find("first")==std::string::npos);
  puts("PASS response headers remain request-local under reentry");}
 '''
         self.compile_run(source, 'http_header_reentry')

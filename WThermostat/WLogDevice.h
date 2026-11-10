@@ -38,7 +38,7 @@ const static char HTTP_WEBLOG[]         PROGMEM = R"=====(
     <label><input type="checkbox" id="pauseLog"> Pause display (new messages are skipped)</label>
 	<label>Live device log<textarea readonly id="t1" rows="18" name="t1"></textarea></label>
 	<p><a href="/logging">Configure logging</a>. Verbose logging includes all MCU communication.</p>
-    <form action="/thermostat_reinit" method="post"><button type="submit">Reinitialize thermostat</button></form>
+    <form action="/thermostat_reinit" method="post"><input type="hidden" name="csrf" value="%s"><button type="submit">Reinitialize thermostat</button></form>
 )=====";
 
 
@@ -163,11 +163,19 @@ public:
 		this->logLevel->setOnChange(std::bind(&WLogDevice::onlogLevelMqttChange, this, std::placeholders::_1));
 		this->logLevelWeb->setOnChange(std::bind(&WLogDevice::onlogLevelWebChange, this, std::placeholders::_1));
 
+        // Follow stored bytes too, so a failed form save restores active logging filters.
+        this->logLevelByte->setOnChange([this](WProperty*) {
+            setlogLevelMqtt(getlogLevelByte()); setMinLogLevel();
+        });
+        this->logLevelWebByte->setOnChange([this](WProperty*) {
+            setlogLevelWeb(getlogLevelWebByte()); setMinLogLevel();
+        });
+
 		// Pages		
 		WPage * weblogPage=new WPage(ID_PAGE_LIVEWEBLOG, TITLE_PAGE_LIVEWEBLOG);
-		weblogPage->setPrintPage([this,weblogPage](AsyncWebServerRequest *request, AsyncResponseStream* page) {
+		weblogPage->setPrintPage([this,weblogPage](AsyncWebServerRequest *request, WCheckedPrint* page) {
 			this->network->log()->notice(PSTR("weblog"));
-			page->print(FPSTR(HTTP_WEBLOG));
+			page->format(HTTP_WEBLOG, this->network->getCsrfToken());
 			page->print(FPSTR(HTTP_HOME_BUTTON));
 			page->print(FPSTR(HTTP_WEBLOG_SCRIPT));
 		});
@@ -175,33 +183,33 @@ public:
     
     }
 
-    virtual void printConfigPage(AsyncWebServerRequest *request, AsyncResponseStream* page) override {
+    virtual void printConfigPage(AsyncWebServerRequest *request, WCheckedPrint* page) override {
     	network->log()->notice(F("Log config page"));
-    	page->printf_P(HTTP_CONFIG_PAGE_BEGIN, getId());
+        page->format(HTTP_CONFIG_PAGE_BEGIN, getId(), this->network->getCsrfToken());
     	//ComboBox with model selection
 
-		page->printf_P(HTTP_COMBOBOX_BEGIN, PSTR("MQTT Log Mode:"), "lm");
-		page->printf_P(HTTP_COMBOBOX_ITEM, "0", (getlogLevelByte() == LOG_LEVEL_SILENT  ? HTTP_SELECTED : ""), PSTR("Logging Disabled"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "1", (getlogLevelByte() == LOG_LEVEL_FATAL   ? HTTP_SELECTED : ""), PSTR("Fatal Messages"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "2", (getlogLevelByte() == LOG_LEVEL_ERROR   ? HTTP_SELECTED : ""), PSTR("Error Messages"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "3", (getlogLevelByte() == LOG_LEVEL_WARNING ? HTTP_SELECTED : ""), PSTR("Warning Messages"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "4", (getlogLevelByte() == LOG_LEVEL_NOTICE  ? HTTP_SELECTED : ""), PSTR("Notice Messages"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "5", (getlogLevelByte() == LOG_LEVEL_TRACE   ? HTTP_SELECTED : ""), PSTR("Trace Messages"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "6", (getlogLevelByte() == LOG_LEVEL_VERBOSE ? HTTP_SELECTED : ""), PSTR("Verbose Messages"));
-		page->printf_P(HTTP_COMBOBOX_END);
+		page->format(HTTP_COMBOBOX_BEGIN, PSTR("MQTT Log Mode:"), "lm");
+		page->format(HTTP_COMBOBOX_ITEM, "0", (getlogLevelByte() == LOG_LEVEL_SILENT  ? HTTP_SELECTED : ""), PSTR("Logging Disabled"));
+		page->format(HTTP_COMBOBOX_ITEM, "1", (getlogLevelByte() == LOG_LEVEL_FATAL   ? HTTP_SELECTED : ""), PSTR("Fatal Messages"));
+		page->format(HTTP_COMBOBOX_ITEM, "2", (getlogLevelByte() == LOG_LEVEL_ERROR   ? HTTP_SELECTED : ""), PSTR("Error Messages"));
+		page->format(HTTP_COMBOBOX_ITEM, "3", (getlogLevelByte() == LOG_LEVEL_WARNING ? HTTP_SELECTED : ""), PSTR("Warning Messages"));
+		page->format(HTTP_COMBOBOX_ITEM, "4", (getlogLevelByte() == LOG_LEVEL_NOTICE  ? HTTP_SELECTED : ""), PSTR("Notice Messages"));
+		page->format(HTTP_COMBOBOX_ITEM, "5", (getlogLevelByte() == LOG_LEVEL_TRACE   ? HTTP_SELECTED : ""), PSTR("Trace Messages"));
+		page->format(HTTP_COMBOBOX_ITEM, "6", (getlogLevelByte() == LOG_LEVEL_VERBOSE ? HTTP_SELECTED : ""), PSTR("Verbose Messages"));
+		page->format(HTTP_COMBOBOX_END);
 
-		page->printf_P(HTTP_COMBOBOX_BEGIN, PSTR("Web Log Mode:"), "lw");
-		page->printf_P(HTTP_COMBOBOX_ITEM, "0", (getlogLevelWebByte() == LOG_LEVEL_SILENT  ? HTTP_SELECTED : ""), PSTR("Logging Disabled"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "1", (getlogLevelWebByte() == LOG_LEVEL_FATAL   ? HTTP_SELECTED : ""), PSTR("Fatal Messages"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "2", (getlogLevelWebByte() == LOG_LEVEL_ERROR   ? HTTP_SELECTED : ""), PSTR("Error Messages"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "3", (getlogLevelWebByte() == LOG_LEVEL_WARNING ? HTTP_SELECTED : ""), PSTR("Warning Messages"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "4", (getlogLevelWebByte() == LOG_LEVEL_NOTICE  ? HTTP_SELECTED : ""), PSTR("Notice Messages"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "5", (getlogLevelWebByte() == LOG_LEVEL_TRACE   ? HTTP_SELECTED : ""), PSTR("Trace Messages"));
-		page->printf_P(HTTP_COMBOBOX_ITEM, "6", (getlogLevelWebByte() == LOG_LEVEL_VERBOSE ? HTTP_SELECTED : ""), PSTR("Verbose Messages"));
-		page->printf_P(HTTP_COMBOBOX_END);
+		page->format(HTTP_COMBOBOX_BEGIN, PSTR("Web Log Mode:"), "lw");
+		page->format(HTTP_COMBOBOX_ITEM, "0", (getlogLevelWebByte() == LOG_LEVEL_SILENT  ? HTTP_SELECTED : ""), PSTR("Logging Disabled"));
+		page->format(HTTP_COMBOBOX_ITEM, "1", (getlogLevelWebByte() == LOG_LEVEL_FATAL   ? HTTP_SELECTED : ""), PSTR("Fatal Messages"));
+		page->format(HTTP_COMBOBOX_ITEM, "2", (getlogLevelWebByte() == LOG_LEVEL_ERROR   ? HTTP_SELECTED : ""), PSTR("Error Messages"));
+		page->format(HTTP_COMBOBOX_ITEM, "3", (getlogLevelWebByte() == LOG_LEVEL_WARNING ? HTTP_SELECTED : ""), PSTR("Warning Messages"));
+		page->format(HTTP_COMBOBOX_ITEM, "4", (getlogLevelWebByte() == LOG_LEVEL_NOTICE  ? HTTP_SELECTED : ""), PSTR("Notice Messages"));
+		page->format(HTTP_COMBOBOX_ITEM, "5", (getlogLevelWebByte() == LOG_LEVEL_TRACE   ? HTTP_SELECTED : ""), PSTR("Trace Messages"));
+		page->format(HTTP_COMBOBOX_ITEM, "6", (getlogLevelWebByte() == LOG_LEVEL_VERBOSE ? HTTP_SELECTED : ""), PSTR("Verbose Messages"));
+		page->format(HTTP_COMBOBOX_END);
 
-    	page->printf_P(HTTP_CONFIG_SAVE_BUTTON);
-		page->printf_P(HTTP_HOME_BUTTON);
+        page->format(HTTP_CONFIG_SAVE_BUTTON);
+		page->format(HTTP_HOME_BUTTON);
     }
     void saveConfigPage(AsyncWebServerRequest *request) override {
         const String mqtt = getValueOrEmpty(request, "lm"), web = getValueOrEmpty(request, "lw");
@@ -293,7 +301,9 @@ public:
 
 	void sendLog(int level, const char* message) override {
 
-		if (level<=getlogLevelWebByte()){
+        // Keep room for a full HTML page; a slow log client must not exhaust the heap.
+		if (level<=getlogLevelWebByte() && wslog.count() &&
+            ESP.getMaxFreeBlockSize() >= 8192U && wslog.availableForWriteAll()){
 			wslog.printfAll(PSTR("%s: %s"), logLevelByteToString(level), message);
 		}
 		if (level<=getlogLevelByte()){
@@ -323,7 +333,8 @@ void webserverInitHook(AsyncWebServer *webServer) override {
 	wslog.onEvent([this](AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventType type, void * arg, uint8_t *data, size_t len){
 		this->wsOnEvent(server, client, type, arg, data, len);
 	});
-	webServer->addHandler(&wslog);
+    // The global WebSocket outlives each server instance.
+	webServer->addHandler(wslog);
 }
 void webserverDeinitHook(AsyncWebServer *webServer) override {
 	wslog.closeAll();

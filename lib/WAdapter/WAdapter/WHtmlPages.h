@@ -3,6 +3,7 @@
 
 #include "Arduino.h"
 #include "WStringStream.h"
+#include "WCheckedPrint.h"
 #include "cstrreplace.h"
 
 const char* HTTP_SELECTED PROGMEM = "selected";
@@ -63,47 +64,17 @@ textarea{min-height:18rem;resize:vertical}
 )=====";
 
 const static char PAGE_JS[]           PROGMEM = R"=====(
-document.addEventListener('DOMContentLoaded', function() {
-    document.querySelectorAll('form').forEach(function(form) {
-        var action = new URL(form.action, location.href).pathname;
-        if (action.indexOf('/save_') === 0 || action === '/reset' || action === '/thermostat_reinit') {
-            form.method = 'post';
-            var token = document.createElement('input');
-            token.type = 'hidden'; token.name = 'csrf'; token.value = window.csrfToken;
-            form.appendChild(token);
-        }
-    });
-});
 function eb(s) {
 	return document.getElementById(s);
-}
-function qs(s) {
-	return document.querySelector(s);
 }
 function sp(i) {
 	eb(i).type = (eb(i).type === 'text' ? 'password' : 'text');
 }
-function c(l){
-	eb('s').value=l.innerText||l.textContent;
-	eb('p').focus();
-}
 function hideStaticIpGroup() {
-	var cb = eb('staticIpEnabled'); 
-	var x = eb('staticIpGroup');
-	if (cb.checked) {
-		x.style.display = 'block';
-	} else {
-		x.style.display = 'none';
-	}
+	eb('staticIpGroup').style.display = eb('staticIpEnabled').checked ? 'block' : 'none';
 }
 function hideMqttGroup() {
-	var cb = eb('mqttEnabled'); 
-	var x = eb('mqttGroup');
-	if (cb.checked) {
-		x.style.display = 'block';
-	} else {
-		x.style.display = 'none';
-	}
+	eb('mqttGroup').style.display = eb('mqttEnabled').checked ? 'block' : 'none';
 }
 function disableBtn(btnid) {
 	var b=eb(btnid);
@@ -115,10 +86,15 @@ function disableBtn(btnid) {
 }
 )=====";
 
-const static char HTTP_BUTTON[]    PROGMEM = R"=====(
+const static char HTTP_BUTTON_BEGIN[]    PROGMEM = R"=====(
 	<div>
 		<form action='/%s' method='%s'>
-			<button>%s</button>
+)=====";
+
+const static char HTTP_CSRF_INPUT[] PROGMEM = "<input type='hidden' name='csrf' value='%s'>";
+
+const static char HTTP_BUTTON_END[] PROGMEM = R"=====(
+			<button type='submit'>%s</button>
 		</form>
 	</div>
 )=====";
@@ -167,7 +143,7 @@ const static char HTTP_SAVED[]              PROGMEM = R"=====(
 const static char HTTP_HOME_BUTTON[]              PROGMEM = R"=====(
 <div>
 	<form action='/config' method='get'>
-		<button>Back to Home</button>
+		<button type='submit'>Back to Home</button>
 	</form>
 </div>
 )=====";
@@ -175,6 +151,7 @@ const static char HTTP_HOME_BUTTON[]              PROGMEM = R"=====(
 const static char HTTP_FORM_FIRMWARE[] PROGMEM = R"=====(
 <p>Downgrading to WThermostat older than 1.23 loses saved settings.</p>
 <form method='post' action='/firmware' enctype='multipart/form-data' onsubmit="disableBtn('fw')">
+<input type='hidden' name='csrf' value='%s'>
 	<div>
 		<label>Firmware file (.bin or .bin.gz)<input type='file' accept='.bin,.gz' name='update' required></label>
 	</div>
@@ -186,6 +163,7 @@ const static char HTTP_FORM_FIRMWARE[] PROGMEM = R"=====(
 
 const static char HTTP_CONFIG_PAGE_BEGIN[]         PROGMEM = R"=====(
 <form method='post' action='/save_%s'>
+<input type='hidden' name='csrf' value='%s'>
 )=====";
 
 const static char HTTP_TEXT_FIELD[]    PROGMEM = R"=====(
@@ -251,7 +229,7 @@ const static char HTTP_CONFIG_SAVEANDREBOOT_BUTTON[]         PROGMEM = R"=====(
 const static char HTTP_THERM_INFO[]         PROGMEM = R"=====(	
 		<br>
 		If you have any questions see documentation at<br>
-		<a href="https://github.com/fashberg/WThermostatBeca/blob/master/Configuration.md" target="_blank" rel="noopener">Configuration documentation (opens a new tab)</a>
+		<a href="https://github.com/labodj/WThermostatBeca-labo/blob/master/Configuration.md" target="_blank" rel="noopener">Configuration documentation (opens a new tab)</a>
 		<br>
 		<br>
 )=====";
@@ -357,18 +335,18 @@ const uint8_t favicon_ico_gz[] PROGMEM = {
 #endif
 const char* STR_BYTE PROGMEM = " Byte";
 
-void htmlTableRowTitle(AsyncResponseStream* page,  char const* title){
+void htmlTableRowTitle(WCheckedPrint* page,  char const* title){
 	page->print(F("<tr><th scope='row'>"));
 	page->print(title);
 	page->print(F("</th><td>"));
 }
-void htmlTableRowTitle(AsyncResponseStream* page,  const __FlashStringHelper * title){
+void htmlTableRowTitle(WCheckedPrint* page,  const __FlashStringHelper * title){
 	page->print(F("<tr><th scope='row'>"));
 	page->print(title);
 	page->print(F("</th><td>"));
 }
 
-void htmlTableRowEnd(AsyncResponseStream* page){
+void htmlTableRowEnd(WCheckedPrint* page){
 	page->print(F("</td></tr>"));
 }
 

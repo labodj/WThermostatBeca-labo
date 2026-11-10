@@ -18,17 +18,18 @@ def raw_constant(path, name):
 
 @unittest.skipUnless(shutil.which("node"), "Node.js is needed to test embedded JavaScript")
 class WebUiTests(unittest.TestCase):
-    def test_post_forms_and_csrf_token(self):
+    def test_password_toggle_and_upload_feedback(self):
         script = raw_constant(ROOT / "lib/WAdapter/WAdapter/WHtmlPages.h", "PAGE_JS")
         probe = r'''
 const vm = require('node:vm'), assert = require('node:assert/strict');
-const forms = ['/save_network','/reset','/thermostat_reinit','/info','/firmware'].map(action => ({action,method:action==='/firmware'?'post':'get',children:[],appendChild(node){this.children.push(node);}}));
-let callback;
-const document = {addEventListener(name,fn){assert.equal(name,'DOMContentLoaded');callback=fn;},querySelectorAll(){return forms;},createElement(){return {};}};
-vm.runInNewContext(SOURCE,{document,URL,location:{href:'http://thermostat/'},window:{csrfToken:'test-token'}});
-callback();
-for(const form of forms.slice(0,3)){assert.equal(form.method,'post');assert.equal(form.children.length,1);assert.equal(form.children[0].name,'csrf');assert.equal(form.children[0].value,'test-token');}
-assert.equal(forms[3].method,'get');assert.equal(forms[4].method,'post');
+const nodes={password:{type:'password'},upload:{disabled:false,textContent:'Upload'}};
+const scope={document:{getElementById(id){return nodes[id];}}};
+vm.runInNewContext(SOURCE,scope);
+scope.sp('password');assert.equal(nodes.password.type,'text');
+scope.sp('password');assert.equal(nodes.password.type,'password');
+scope.disableBtn('upload');assert.equal(nodes.upload.disabled,true);
+assert.equal(nodes.upload.textContent,'Uploading firmware...');
+scope.disableBtn('missing');
 '''
         subprocess.run(["node", "-e", "const SOURCE=" + json.dumps(script) + ";\n" + probe], check=True)
 

@@ -15,9 +15,22 @@ BECA = ROOT / "WThermostat/WBecaDevice.h"
 NETWORK = ROOT / "lib/WAdapter/WAdapter/WNetwork.h"
 
 
+def tcp_source():
+    # Resolve the explicit Git dependency, even if PIO also caches the registry copy.
+    from platformio.package.manager.library import LibraryPackageManager
+    from platformio.project.config import ProjectConfig
+
+    specs = ProjectConfig.get_instance(str(ROOT / "platformio.ini")).get("env:wthermostat", "lib_deps")
+    spec = next(spec for spec in specs if spec.startswith("ESPAsyncTCP="))
+    package = LibraryPackageManager(str(ROOT / ".pio/libdeps/wthermostat")).get_package(spec)
+    if package is None:
+        raise AssertionError("Run pio pkg install -e wthermostat before these integration tests")
+    return Path(package.path) / "src/ESPAsyncTCP.cpp"
+
+
 def method(path, name):
     text = path.read_text()
-    match = re.search(r"(?m)^[ \t]*(?!return\b)(?:virtual\s+)?(?:[\w:<>&*]+[ \t]+)+" + re.escape(name) + r"\s*\(", text)
+    match = re.search(r"(?m)^[ \t]*(?!return\b)(?:virtual\s+)?(?:[\w:<>&*]+[ \t]+)+[*&]*" + re.escape(name) + r"\s*\(", text)
     if not match:
         raise AssertionError(f"Missing production method: {path}:{name}")
     opening = text.index("{", match.end())
@@ -156,6 +169,7 @@ struct AsyncWebServerRequest{
 };
 struct Wifi{int softAPIP(){return 1;}} WiFi;
 struct Probe{
+    struct Auth { bool authenticate(AsyncWebServerRequest* r,const char*) {return r->authenticated;} } digestAuth;
     bool updating=false;AsyncWebServerRequest*updateRequest=nullptr;
     bool isUpdateRunning(){return updating;}
     bool localRecoveryActive=false;unsigned long localRecoveryStartedAt=0;

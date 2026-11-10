@@ -17,8 +17,8 @@ public:
 	}
 
 
-    bool canParse(const String& value) override {
-        return WProperty::canParse(value) && value.toDouble() >= minimum && value.toDouble() <= maximum;
+    bool isValidValue(const String& value) override {
+        return WProperty::isValidValue(value) && value.toDouble() >= minimum && value.toDouble() <= maximum;
     }
 
 protected:

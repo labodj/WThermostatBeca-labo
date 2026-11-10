@@ -121,7 +121,10 @@ void setup() {
         network->deleteSettingsOld();
         network->log()->trace(F("Writing Config (%d)"), ESP.getMaxFreeBlockSize());
         #ifndef DEBUG
-        network->getSettings()->save();
+        if (!network->getSettings()->save()) {
+            network->getSettings()->writesEnabled = false;
+            network->log()->error(F("Settings migration failed; writes disabled until network settings are saved successfully"));
+        }
         #else
         network->log()->trace(F("Writing Config - not really, because debug MODE"));
         #endif

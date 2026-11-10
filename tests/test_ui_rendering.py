@@ -70,13 +70,24 @@ class UiRenderingTests(unittest.TestCase):
                     self.assertTrue(labelled or attrs.get("type") == "hidden", attrs)
                 self.assertTrue(all(form.get("action") for form in doc.forms))
 
+    def test_buttons_table_headers_and_restart_navigation_are_explicit(self):
+        for route, source in self.pages.items():
+            if route in ("/css", "/js"):
+                continue
+            with self.subTest(route=route):
+                self.assertNotIn("<button>", source)
+                self.assertNotIn("<th>", source)
+                self.assertNotRegex(source, r"http-equiv=['\"]refresh")
+        status = Document(self.pages["/restart-status-preview"])
+        self.assertIn({"action": "/config", "method": "get"}, status.forms)
+
     def test_schedules_preserve_all_fields_and_protocol_precision(self):
         for route, step, maximum in (("/thermostat_schedules", "0.5", "35.0"),
                                      ("/schedules-fine", "0.1", "25.5"),
                                      ("/schedules-whole", "1.0", "35.0")):
             with self.subTest(route=route):
                 doc = Document(self.pages[route])
-                fields = {attrs["name"]: attrs for _, attrs, _ in doc.fields}
+                fields = {attrs["name"]: attrs for _, attrs, _ in doc.fields if attrs["name"] != "csrf"}
                 self.assertEqual({day + str(period) + kind for day in "wau" for period in range(1, 7)
                                   for kind in "ht"}, set(fields))
                 for name, attrs in fields.items():
