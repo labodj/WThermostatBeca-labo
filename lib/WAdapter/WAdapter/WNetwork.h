@@ -2147,7 +2147,7 @@ private:
 		wlog->trace(F("loading settings, getNetworkSettingsVersion: 0x%02x"), settings->getNetworkSettingsVersion());
 		if (settingsOld){
 			settings->reallyReadSettings=false;
-			settingsOld->reallyReadSettings=true;
+			settingsOld->reallyReadSettings = settingsOld->existsSettingsNetwork();
 			if (settingsOld->getNetworkSettingsVersion()==NETWORKSETTINGS_PRE_FAS114){
 				wlog->notice(F("Reading NetworkSettings PRE_FAS114"));
 				settingsOld->setString(PROP_IDX, 32, "");

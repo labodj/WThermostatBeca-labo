@@ -221,9 +221,9 @@ Screenshots are illustrative; labels and available controls can differ from the 
 
 ## Build and test
 
-The ESP8266 TCP dependency is the minimal [labodj/ESPAsyncTCP maintenance fork](https://github.com/labodj/ESPAsyncTCP), pinned to a full commit SHA. Its lifetime, accepted-byte and pending-output fixes are tested in that repository. ESPAsyncWebServer is also pinned to a full commit SHA in the integration fork. Builds do not patch either dependency.
+The ESP8266 TCP dependency is the [labodj/ESPAsyncTCP maintenance fork](https://github.com/labodj/ESPAsyncTCP), pinned to a full commit SHA. It contains the callback-lifetime fix for issue 511 and the accepted-byte and pending-output fixes, with tests in that repository. ESPAsyncWebServer is pinned to a full commit SHA in the [official repository](https://github.com/ESP32Async/ESPAsyncWebServer). Builds do not patch either dependency.
 
-Digest and HTTP transport integration tests require the pinned ESPAsyncWebServer sources, installed by the commands below. They exercise its Digest verifier and actual send-buffer code, including partial TCP writes and retrying data sources.
+Digest and HTTP transport integration tests require the pinned ESPAsyncWebServer sources, installed by the commands below. They exercise its Digest verifier and actual send-buffer code, including bounded TCP space and retrying data sources.
 
 The validated development host is **Linux x86_64, Python 3.14** (CI uses 3.14.10), with g++/ASan/UBSan, Node.js for JavaScript checks, and PlatformIO **6.2.0**. Other hosts need a compatible toolchain override in `platformio_override.ini`. WAdapter is already included in the repository; no submodule initialization is required.
 

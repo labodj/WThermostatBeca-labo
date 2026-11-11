@@ -57,9 +57,9 @@ struct Probe{
  WProperty*idx=nullptr,*ssid=nullptr,*netBits1=nullptr,*mqttBaseTopic=nullptr,*supportingMqtt=nullptr,*supportingMqttHASS=nullptr,
  *supportingApFallback=nullptr,*supportingMqttSingleValues=nullptr,*staticIpEnabled=nullptr,*staticIp=nullptr,*subnetMask=nullptr,*gateway=nullptr,*dns1=nullptr,*dns2=nullptr;
  WNetworkStrings networkStrings;String extendedWifiPassword;byte bssid[6]{};bool bssidLocked=false;
- Probe(){startAddressReadOffset=startAddressSaveOffset=2;settings=new WSettings(wlog,0xf1,false);
+ Probe(bool expected=true){startAddressReadOffset=startAddressSaveOffset=2;settings=new WSettings(wlog,0xf1,false);
   if(settings->getNetworkSettingsVersion()!=NETWORKSETTINGS_CURRENT||settings->getApplicationSettingsVersion()!=0xf1)settingsOld=new WSettings(wlog,0xf1,true);
-  assert(loadSettings());}
+  assert(loadSettings()==expected);}
  ~Probe(){delete supportingMqtt;delete supportingMqttHASS;delete supportingApFallback;delete supportingMqttSingleValues;delete staticIpEnabled;delete settingsOld;delete settings;}
  String getClientName(bool){return "default-room";}String getMacAddress(){return "AA:BB:CC:DD:EE:FF";}
  bool isSupportingWebThing(){return true;}
@@ -78,6 +78,8 @@ void legacy(){
  EEPROM.bytes[at]=0xa7;EEPROM.bytes[504]=0xb5;for(unsigned i=0;i<6;++i)EEPROM.bytes[505+i]=i+2;
 }
 int main(){
+ EEPROM.bytes.fill(0xff);EEPROM.commitOk=true;
+ {Probe p(false);assert(strlen(p.getSsid())==0&&strlen(p.getPassword())==0);}
  legacy();const auto original=EEPROM.bytes;
  {Probe p;assert(p.settings->writesEnabled);
   assert(p.getIdx()==name&&p.getMqttUser()==user&&p.getMqttPassword()==password&&p.getMqttTopic()==topic);
