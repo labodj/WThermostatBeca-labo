@@ -1,5 +1,6 @@
 """Contracts on HTML emitted by the actual firmware page builders."""
 import json
+import re
 import shutil
 import subprocess
 import unittest
@@ -42,6 +43,42 @@ class Document(HTMLParser):
 
 
 class UiRenderingTests(unittest.TestCase):
+    def test_resync_requires_confirmation_from_home_and_weblog(self):
+        for route in ("/config", "/logging_weblog"):
+            forms = Document(self.pages[route]).forms
+            self.assertIn({"action": "/thermostat_reinit", "method": "get"}, forms)
+            self.assertIn("Resync thermostat</button>", self.pages[route])
+        confirmation = self.pages["/thermostat_reinit"]
+        forms = Document(confirmation).forms
+        self.assertIn({"action": "/save_thermostat_reinit", "method": "post"}, forms)
+        self.assertIn({"action": "/config", "method": "get"}, forms)
+        self.assertIn("name='confirm' value='1'>Confirm resync</button>", confirmation)
+        self.assertIn(">Cancel</button>", confirmation)
+        self.assertIn("does not restart the ESP8266 or erase", confirmation)
+
+    def test_info_section_headings_are_centered(self):
+        for route in ("/info", "/info-bac"):
+            sections = re.findall(r"<th colspan='2' scope='rowgroup'>(.*?)</th>", self.pages[route])
+            self.assertCountEqual(["Main", "Clock", "Thermostat"], sections)
+        self.assertIn("th[scope=rowgroup]{text-align:center}", self.pages["/css"])
+        self.assertIn("th,td{text-align:left;", self.pages["/css"])
+
+    def test_display_branding_and_project_links_keep_legacy_identity(self):
+        for route, source in self.pages.items():
+            if route in ("/css", "/js", "/restart-status-preview"):
+                continue
+            with self.subTest(route=route):
+                self.assertIn("<strong>WThermostat-Labo</strong>", source)
+        repo = "https://github.com/labodj/WThermostatBeca-labo"
+        for route, urls in (("/info", (repo, repo + "/issues")),
+                            ("/info-bac", (repo, repo + "/issues")),
+                            ("/firmware", (repo + "/releases",))):
+            for url in urls:
+                self.assertRegex(self.pages[route], r"<a\b[^>]*href=['\"]" + re.escape(url) + r"['\"]")
+        # This value still seeds default hostnames, MQTT client IDs and AP names.
+        application = (ROOT / "WThermostat/WThermostat.cpp").read_text()
+        self.assertRegex(application, r'#define\s+APPLICATION\s+"WThermostat"')
+
     @classmethod
     def setUpClass(cls):
         cls.pages = render_pages()
@@ -127,7 +164,7 @@ class UiRenderingTests(unittest.TestCase):
 
     def test_home_mutations_are_post_before_javascript(self):
         methods = {form["action"]: form["method"] for form in Document(self.pages["/config"]).forms}
-        self.assertEqual("post", methods["/thermostat_reinit"])
+        self.assertEqual("get", methods["/thermostat_reinit"])
         self.assertEqual("post", methods["/reset"])
         self.assertEqual("get", methods["/firmware"])
         for route, heading in (("/config", "Home"), ("/clock", "Clock"), ("/thermostat", "Thermostat")):

@@ -38,7 +38,7 @@ const static char HTTP_WEBLOG[]         PROGMEM = R"=====(
     <label><input type="checkbox" id="pauseLog"> Pause display (new messages are skipped)</label>
 	<label>Live device log<textarea readonly id="t1" rows="18" name="t1"></textarea></label>
 	<p><a href="/logging">Configure logging</a>. Verbose logging includes all MCU communication.</p>
-    <form action="/thermostat_reinit" method="post"><input type="hidden" name="csrf" value="%s"><button type="submit">Reinitialize thermostat</button></form>
+    <form action="/thermostat_reinit" method="get"><button type="submit">Resync thermostat</button></form>
 )=====";
 
 
@@ -175,7 +175,7 @@ public:
 		WPage * weblogPage=new WPage(ID_PAGE_LIVEWEBLOG, TITLE_PAGE_LIVEWEBLOG);
 		weblogPage->setPrintPage([this,weblogPage](AsyncWebServerRequest *request, WCheckedPrint* page) {
 			this->network->log()->notice(PSTR("weblog"));
-			page->format(HTTP_WEBLOG, this->network->getCsrfToken());
+			page->print(FPSTR(HTTP_WEBLOG));
 			page->print(FPSTR(HTTP_HOME_BUTTON));
 			page->print(FPSTR(HTTP_WEBLOG_SCRIPT));
 		});
@@ -321,7 +321,11 @@ public:
         if (!client || client->status() != WS_CONNECTED || !client->canSend()) return;
         if (type == WS_EVT_CONNECT) {
             client->printf(PSTR("Hello WebSocket Client #%u\n"), client->id());
-            client->printf(PSTR("Now you see all logs for logSeverity %s (or more important)\n"), logLevelWeb->c_str());
+            if (getlogLevelWebByte() == LOG_LEVEL_SILENT) {
+                client->printf(PSTR("Web logging is disabled.\n"));
+            } else {
+                client->printf(PSTR("Showing %s logs and more severe messages.\n"), logLevelWeb->c_str());
+            }
             client->ping();
         } else if (type == WS_EVT_DATA) client->ping();
     }

@@ -59,6 +59,7 @@ legend{font-weight:600;padding:0 .25rem}
 .schedule-period{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem;border:0;padding:.5rem 0}
 .schedule-period label{display:flex;flex-direction:column;justify-content:space-between;gap:.25rem}
 table{width:100%;border-collapse:collapse}th,td{text-align:left;vertical-align:top;padding:.4rem;border-bottom:1px solid #cbd5e1}
+th[scope=rowgroup]{text-align:center}
 textarea{min-height:18rem;resize:vertical}
 #mqttGroup,#staticIpGroup{padding:.75rem;border:1px solid #94a3b8;border-radius:.3rem}
 )=====";

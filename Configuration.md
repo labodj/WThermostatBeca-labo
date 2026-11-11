@@ -30,6 +30,12 @@ Network fields, BSSID and long passwords are written in one checked EEPROM commi
 
 Administrator login uses expiring, boot-local Digest challenges with request-target and replay checks. Existing passwords and the optional login/recovery settings are unchanged. HTTP remains unencrypted.
 
+### Resync thermostat
+
+**Resync thermostat** in Home or Live WebLog opens a confirmation page. It restarts communication with the thermostat controller and requests its current state; it does not restart the ESP8266 or erase Wi-Fi, MQTT, thermostat settings or schedules. **Cancel** returns Home without starting the operation. Only **Confirm resync** submits the action.
+
+For integrations, `GET /thermostat_reinit` and a legacy `POST /thermostat_reinit` only display the confirmation. Execution requires `POST /save_thermostat_reinit` with `confirm=1` in the form body, under the existing authentication and CSRF policy. GET, a missing/invalid confirmation, or a query-string confirmation alone does not execute it.
+
 ## 1. Connect to the WiFi Access Point of the Thermostat
 
 * The thermostat becomes an Access Point when it's started first time after flashing with no configuration.

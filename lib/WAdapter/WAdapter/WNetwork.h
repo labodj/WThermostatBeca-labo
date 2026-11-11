@@ -1154,7 +1154,7 @@ public:
 
 	void handleOnRoot(AsyncWebServerRequest *request){
 		String url=request->url();
-        const bool mutation = url.startsWith(URI_SAVE) || url == URI_RESET || url == "/thermostat_reinit";
+        const bool mutation = url.startsWith(URI_SAVE) || url == URI_RESET;
         if (mutation && request->method() != HTTP_POST) { request->send(405); return; }
         if (!url.startsWith(URI_THINGS) && !authorize(request, mutation)) return;
 		if (!checkAndLogWebAccess(request)) return;
@@ -1597,7 +1597,7 @@ private:
 					WPage *subpage = device->firstPage;
 					while (subpage != nullptr) {
 						String url =(String)device->getId()+"_"+(String)subpage->getId();
-						printHttpButton(page, url.c_str(), strcmp(subpage->getId(), "reinit") == 0 ? HTTP_POST : HTTP_GET, subpage->getTitle());
+						printHttpButton(page, url.c_str(), HTTP_GET, subpage->getTitle());
 						subpage = subpage->next;
 					}
 					device = device->next;
@@ -1869,6 +1869,7 @@ private:
 			WCheckedPrint* page = httpHeader(request, "Info");
             if (!page) return;
 			printHttpCaption(page);
+			page->print(F("<p><a href='https://github.com/labodj/WThermostatBeca-labo'>WThermostat-Labo on GitHub</a> &middot; <a href='https://github.com/labodj/WThermostatBeca-labo/issues'>Report an issue</a></p>"));
 			page->print(F("<table><caption>Device diagnostics</caption><tbody>"));
 			// header
 			page->print(F("<tr><th colspan='2' scope='rowgroup'>Main</th></tr>"));
@@ -1985,7 +1986,8 @@ private:
 
 	void printHttpCaption(WCheckedPrint* page) {
 		page->print(F("<p class='identity'><strong>"));
-		page->print(htmlEscapedString(applicationName.c_str()));
+		// Display branding is separate from the legacy name used by device identities.
+		page->print(F("WThermostat-Labo"));
 		page->print(F("</strong> "));
 		page->print(" ");
 		page->print(htmlEscapedString(firmwareVersion.c_str()));
@@ -2075,6 +2077,7 @@ private:
 			WCheckedPrint* page = httpHeader(request, F("Firmware update"));
             if (!page) return;
 			printHttpCaption(page);
+			page->print(F("<p><a href='https://github.com/labodj/WThermostatBeca-labo/releases'>Download firmware and read release notes on GitHub</a></p>"));
 			page->format(HTTP_FORM_FIRMWARE, getCsrfToken());
             page->print(F("<p>Maximum OTA upload: "));
             const uint32_t freeSpace = ESP.getFreeSketchSpace();

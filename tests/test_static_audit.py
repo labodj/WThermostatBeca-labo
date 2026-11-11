@@ -165,20 +165,21 @@ const char*URI_SAVE="/save_",*URI_RESET="/reset",*URI_THINGS="/things",*URI_CONF
  *URI_INFO="/info",*URI_FIRMWARE="/firmware",*URI_CSS="/css",*URI_JS="/js",*URI_FAVICON="/favicon",*ID_NETWORK="network";
 const char*CT_TEXT_CSS="text/css",*CT_TEXT_JS="text/js",*CT_IMAGE_ICON="image/x-icon",*PAGE_CSS="",*PAGE_JS="",*favicon_ico_gz="";
 const int favicon_ico_gz_len=0;
-struct AsyncWebServerRequest{String path;int verb=HTTP_GET,status=0;bool authenticated=true;
+struct AsyncWebServerRequest{String path;int verb=HTTP_GET,status=0;bool authenticated=true,csrf=true;
  String url(){return path;}int method(){return verb;}void send(int code){assert(status==0);status=code;}
  void redirect(const char*){send(302);}};
-struct WPage{WPage*next=nullptr;const char*getId(){return "page";}};
-struct WDevice{WDevice*next=nullptr;WPage*firstPage=nullptr;const char*getId(){return "device";}};
-struct Probe{WDevice*firstDevice=nullptr;bool mutation=false;
- bool authorize(AsyncWebServerRequest*r,bool value){mutation=value;if(!r->authenticated){r->send(401);return false;}return true;}
+struct WPage{WPage*next=nullptr;const char*id="page";const char*getId(){return id;}};
+struct WDevice{WDevice*next=nullptr;WPage*firstPage=nullptr;const char*id="device";const char*getId(){return id;}};
+struct Probe{WDevice*firstDevice=nullptr;bool mutation=false;unsigned submitted=0;
+ bool authorize(AsyncWebServerRequest*r,bool value){mutation=value;if(!r->authenticated){r->send(401);return false;}if(value&&!r->csrf){r->send(403);return false;}return true;}
+ void handleHttpDevicePageSubmitted(AsyncWebServerRequest*r,WDevice*,WPage*){++submitted;r->send(200);}
  bool checkAndLogWebAccess(AsyncWebServerRequest*){return true;}
  void handleUnknown(AsyncWebServerRequest*r){r->send(404);}
 '''
         for name in ['handleHttpRootRequest', 'handleHttpNetworkConfiguration', 'handleHttpSave',
                      'handleHttpInfo', 'handleHttpReset', 'handleHttpFirmwareUpdate', 'replyStatic',
                      'handleOnThings', 'handleHttpDeviceConfiguration', 'handleHttpSaveDeviceConfiguration',
-                     'handleHttpDevicePage', 'handleHttpDevicePageSubmitted']:
+                     'handleHttpDevicePage']:
             source += f'template<class...T>void {name}(AsyncWebServerRequest*r,T...){{r->send(200);}}\n'
         source += native.method(native.NETWORK, 'handleOnRoot')+r'''
 };
@@ -188,6 +189,21 @@ int main(){
  for(int verb:{HTTP_GET,HTTP_POST}){Probe p;AsyncWebServerRequest r;r.path="/info";r.verb=verb;p.handleOnRoot(&r);assert(r.status==200);}
  Probe p;AsyncWebServerRequest r;r.path="/save_network";r.verb=HTTP_POST;p.handleOnRoot(&r);assert(r.status==200&&p.mutation);
  AsyncWebServerRequest denied;denied.path="/info";denied.authenticated=false;p.handleOnRoot(&denied);assert(denied.status==401);
+ for(int verb:{HTTP_GET,HTTP_POST}){
+  Probe p;WDevice device;WPage page;device.id="thermostat";page.id="reinit";
+  device.firstPage=&page;p.firstDevice=&device;
+  AsyncWebServerRequest preview;preview.path="/thermostat_reinit";preview.verb=verb;
+  p.handleOnRoot(&preview);assert(preview.status==200&&!p.mutation&&!p.submitted);
+ }
+ for(int scenario=0;scenario<4;++scenario){
+  Probe p;WDevice device;WPage page;device.id="thermostat";page.id="reinit";
+  device.firstPage=&page;p.firstDevice=&device;
+  AsyncWebServerRequest r;r.path="/save_thermostat_reinit";r.verb=scenario==0?HTTP_GET:HTTP_POST;
+  r.authenticated=scenario!=1;r.csrf=scenario!=2;p.handleOnRoot(&r);
+  assert(r.status==(scenario==0?405:scenario==1?401:scenario==2?403:200));
+  assert(p.submitted==(scenario==3?1U:0U));
+  if(scenario==3)assert(p.mutation);
+ }
  puts("PASS root dispatcher completes all tested methods and preserves POST/auth guards");}
 '''
         self.compile_run(source, 'http_dispatch')

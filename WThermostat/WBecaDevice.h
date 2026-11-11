@@ -271,7 +271,7 @@ const char* ATTYPE_HEATINGCOOLING PROGMEM = "HeatingCoolingProperty";
 const char* ID_PAGE_SCHEDULE PROGMEM = "schedules";
 const char* TITLE_PAGE_SCHEDULE PROGMEM = "Configure Schedules";
 const char* ID_PAGE_REINIT PROGMEM = "reinit";
-const char* TITLE_PAGE_REINIT PROGMEM = "Reinit Thermostat";
+const char* TITLE_PAGE_REINIT PROGMEM = "Resync thermostat";
 
 const byte STORED_FLAG_BECA = 0x36;
 const char SCHEDULES_PERIODS[] = "123456";
@@ -646,13 +646,18 @@ public:
 		// Pages reinit		
 		WPage * reinitPage=new WPage(ID_PAGE_REINIT, TITLE_PAGE_REINIT);
 		reinitPage->setPrintPage([this,reinitPage](AsyncWebServerRequest *request, WCheckedPrint* page) {
-			this->network->log()->notice(PSTR("Reinit"));
-			page->print(F("Reinitialized"));
-			page->print(FPSTR(HTTP_HOME_BUTTON));
-			startMcuInitialize();
+			page->print(F("<p>This restarts communication with the thermostat controller and requests its current state. It does not restart the ESP8266 or erase Wi-Fi, MQTT or thermostat settings and schedules.</p>"));
+			page->format(PSTR("<form action='/save_thermostat_reinit' method='post'><input type='hidden' name='csrf' value='%s'><button type='submit' name='confirm' value='1'>Confirm resync</button></form>"), this->network->getCsrfToken());
+			page->print(F("<form action='/config' method='get'><button type='submit'>Cancel</button></form>"));
 		});
 		reinitPage->setSubmittedPage([this,reinitPage](AsyncWebServerRequest *request, WCheckedPrint* page) {
-			page->print(F("VOID"));			
+            if (request->method() != HTTP_POST || !request->hasParam("confirm", true) ||
+                request->getParam("confirm", true)->value() != "1") {
+                page->print(F("Resynchronization was not confirmed. No action was taken."));
+                return;
+            }
+            startMcuInitialize();
+            page->print(F("Resynchronization requested. The controller state will refresh when it replies."));
 		});
 		this->addPage(reinitPage);
 		

@@ -38,7 +38,13 @@ void*operator new(size_t size,const std::nothrow_t&)noexcept{
     if(FAIL_RESPONSE || size>MAX_BLOCK || size>allocationBudget || (FAIL_HEADER_WRITE && size>200))return nullptr;
     allocationBudget-=size;return ::operator new(size);
 }
+enum WebRequestMethod{HTTP_GET=1,HTTP_POST=2};
 struct AsyncWebServerRequest{
+    struct Parameter {String text;const String&value(){return text;}} confirmation;
+    int verb=HTTP_GET;bool confirmed=false;
+    int method(){return verb;}
+    bool hasParam(const char*name,bool body){return body&&confirmed&&!strcmp(name,"confirm");}
+    Parameter*getParam(const char*name,bool body){return hasParam(name,body)?&confirmation:nullptr;}
     void removeHeaders(){}
     struct Client{int localIP(){return 1;}};Client*client(){return nullptr;}
     std::string body;int status=0;
@@ -64,7 +70,6 @@ String getResetReason(){return "Software/System restart";}String getResetInfo(){
 struct Log{template<class...T>void notice(T...){}};
 enum class wnWifiMode{WIFIMODE_STATION,WIFIMODE_FALLBACK};using wnWifiMode_t=wnWifiMode;
 const char*CT_TEXT_HTML="text/html",*CT_TEXT_PLAIN="text/plain",*ID_NETWORK="network";
-enum WebRequestMethod{HTTP_GET,HTTP_POST};
 const char*FORM_PW_NOCHANGE="___NOCHANGE___";
 struct WDevice{
     WDevice*next=nullptr;WPage*firstPage=nullptr;const char*id;const char*name;
@@ -111,6 +116,10 @@ struct Net{
 enum{LOG_LEVEL_SILENT,LOG_LEVEL_FATAL,LOG_LEVEL_ERROR,LOG_LEVEL_WARNING,LOG_LEVEL_NOTICE,LOG_LEVEL_TRACE,LOG_LEVEL_VERBOSE};
 struct Value{String text;Value(const char*s=""):text(s){}bool getBoolean(){return true;}byte getByte(){return 1;}double getDouble(){return 20;}int getInteger(){return 60;}const char*c_str(){return text.c_str();}};
 struct Beca{
+    WPage*reinitPage=nullptr;unsigned resyncs=0;
+    ~Beca(){delete reinitPage;}
+    void addPage(WPage*page){reinitPage=page;}
+    void startMcuInitialize(){++resyncs;}
     Net*network;Value value;Value*floorSensor=&value,*switchBackToAuto=&value,*deadzoneTemp=&value;
     Value sensor{"Fake <MCU> & sensor"},modeValue{"heat"};Value*mcuId=&sensor,*mode=&modeValue,*schedulesMode=&modeValue,*holdState=&modeValue,*systemMode=&modeValue,*fanMode=&modeValue,*action=&modeValue,*state=&modeValue;
     Value*deviceOn=&value,*actualTemperature=&value,*actualFloorTemperature=&value,*targetTemperature=&value,*ecoMode=&value;
@@ -123,7 +132,9 @@ struct Beca{
 '''+method(BECA, "printConfigPage")+method(BECA, "printInfoPage")
     schedule = beca.split("schedulePage->setPrintPage(", 1)[1].split("schedulePage->setSubmittedPage(", 1)[0]
     schedule = schedule[schedule.index("{") + 1:schedule.rindex("});")]
-    source += '\nvoid printSchedules(AsyncWebServerRequest*request,WCheckedPrint*page){WPage item("schedules","Schedules");WPage*schedulePage=&item;' + schedule + "}\n};\n"
+    source += '\nvoid printSchedules(AsyncWebServerRequest*request,WCheckedPrint*page){WPage item("schedules","Schedules");WPage*schedulePage=&item;' + schedule + "}\n"
+    reinit = beca[beca.index("WPage * reinitPage="):beca.index("this->addPage(reinitPage);") + len("this->addPage(reinitPage);")]
+    source += "void installResyncPage(){" + reinit + "}\n};\n"
     source += r'''
 struct Clock{
     Net*network;Value server{"pool.ntp.org"},zone{"99"},dst{"0,3,0,2,120"},standard{"0,10,0,3,60"};
@@ -142,12 +153,13 @@ void emit(const char*name,AsyncWebServerRequest&r){printf("%s\n%s\x1e",name,r.bo
 int main(){
     Net net;Beca beca(&net);Clock clock(&net);Logging logging(&net);
     WDevice therm("thermostat","Thermostat"),time("clock","Clock"),logs("logging","Logging");
-    WPage schedules("schedules","Configure schedules"),reinit("reinit","Reinitialize thermostat"),weblog("weblog","Live log");
+    WPage schedules("schedules","Configure schedules"),weblog("weblog","Live log");
+    beca.installResyncPage();
     therm.info=[&](WCheckedPrint*p){beca.printInfoPage(p);};time.info=[&](WCheckedPrint*p){clock.printInfoPage(p);};
     therm.config=[&](AsyncWebServerRequest*r,WCheckedPrint*p){beca.printConfigPage(r,p);};
     time.config=[&](AsyncWebServerRequest*r,WCheckedPrint*p){clock.printConfigPage(r,p);};
     logs.config=[&](AsyncWebServerRequest*r,WCheckedPrint*p){logging.printConfigPage(r,p);};
-    therm.next=&time;time.next=&logs;therm.firstPage=&schedules;schedules.next=&reinit;logs.firstPage=&weblog;net.firstDevice=&therm;
+    therm.next=&time;time.next=&logs;therm.firstPage=&schedules;schedules.next=beca.reinitPage;logs.firstPage=&weblog;net.firstDevice=&therm;
     schedules.setPrintPage([&](AsyncWebServerRequest*r,WCheckedPrint*p){beca.printSchedules(r,p);});
     unsigned submitted=0;
     schedules.setSubmittedPage([&](AsyncWebServerRequest*,WCheckedPrint*p){++submitted;p->print("Submitted preview");});
@@ -168,7 +180,8 @@ int main(){
     {AsyncWebServerRequest r;net.restartFlag="Preview status";net.handleHttpRootRequest(&r);emit("/restart-status-preview",r);net.restartFlag=nullptr;}
     {AsyncWebServerRequest r;beca.factor=10;net.handleHttpDevicePage(&r,&therm,&schedules);emit("/schedules-fine",r);beca.factor=2;}
     {AsyncWebServerRequest r;beca.factor=1;net.handleHttpDevicePage(&r,&therm,&schedules);emit("/schedules-whole",r);beca.factor=2;}
-    {AsyncWebServerRequest r;auto*p=net.httpHeader(&r,"Live log");if(p){net.printHttpCaption(p);p->format(HTTP_WEBLOG,net.getCsrfToken());p->print(FPSTR(HTTP_HOME_BUTTON));p->print(FPSTR(HTTP_WEBLOG_SCRIPT));net.httpFooter(p);net.sendHttpPage(&r,p);}emit("/logging_weblog",r);}
+    {AsyncWebServerRequest r;auto*p=net.httpHeader(&r,"Live log");if(p){net.printHttpCaption(p);p->print(FPSTR(HTTP_WEBLOG));p->print(FPSTR(HTTP_HOME_BUTTON));p->print(FPSTR(HTTP_WEBLOG_SCRIPT));net.httpFooter(p);net.sendHttpPage(&r,p);}emit("/logging_weblog",r);}
+    {AsyncWebServerRequest r;net.handleHttpDevicePage(&r,&therm,beca.reinitPage);emit("/thermostat_reinit",r);assert(beca.resyncs==0);}
     {AsyncWebServerRequest r;net.handleHttpFirmwareUpdate(&r);emit("/firmware",r);}
     {AsyncWebServerRequest r;net.handleHttpInfo(&r);emit("/info",r);}
     {AsyncWebServerRequest r;beca.model=1;net.handleHttpInfo(&r);emit("/info-bac",r);}

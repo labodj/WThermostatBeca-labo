@@ -1,15 +1,22 @@
 # WThermostatBeca-labo
 
-Local-control firmware for compatible **ESP8266 Beca/Moes/Qiumi Wi-Fi thermostats**, without a Tuya cloud dependency. This is the maintenance fork of [fashberg/WThermostatBeca](https://github.com/fashberg/WThermostatBeca), originally based on [klausahrenberg/WThermostatBeca](https://github.com/klausahrenberg/WThermostatBeca).
+**WThermostat-Labo** is local-control firmware for compatible **ESP8266 Beca/Moes/Qiumi Wi-Fi thermostats**, without a Tuya cloud dependency. This is the maintenance fork of [fashberg/WThermostatBeca](https://github.com/fashberg/WThermostatBeca), originally based on [klausahrenberg/WThermostatBeca](https://github.com/klausahrenberg/WThermostatBeca).
 
-**Current stable release: [v1.27.0](https://github.com/labodj/WThermostatBeca-labo/releases/tag/v1.27.0).** See GitHub Releases for changes, firmware downloads and upgrade notes.
+**Current stable release: [v1.27.1](https://github.com/labodj/WThermostatBeca-labo/releases/tag/v1.27.1).** See GitHub Releases for changes, firmware downloads and upgrade notes.
 
 [![Build](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml/badge.svg)](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml)
 [![Latest stable release](https://img.shields.io/github/v/release/labodj/WThermostatBeca-labo)](https://github.com/labodj/WThermostatBeca-labo/releases)
 
-## What changed in 1.27.0
+## What changed in 1.27.1
 
-This release improves web transport, authentication and configuration persistence:
+- The web interface displays **WThermostat-Labo**. Info links to the GitHub repository and issues; the firmware-update page links to releases. Branding does not change stored names, MQTT topics or discovery identifiers.
+- **Resync thermostat** replaces the immediate Reinit action in Home and Live WebLog. The first click opens an explanation; **Confirm resync** sends the protected action, while **Cancel** returns Home without starting it. This works without JavaScript.
+- Silent WebLog correctly reports **Web logging is disabled.** Other levels describe the selected logging threshold.
+- Main, Clock and Thermostat section headings are centered in Info; individual labels remain left-aligned.
+
+## Reliability and configuration
+
+The transport, authentication and persistence improvements introduced in 1.27.0 remain in place:
 
 - Digest challenges are tied to this boot, expire after five minutes, and reject reused counters and mismatched request targets. A small replay window allows parallel browser requests and repeated callbacks within one upload.
 - Network forms save legacy fields, BSSID and long credentials in one checked EEPROM commit. Device forms also batch their writes. Failed commits return an error without scheduling a reboot and restore the previous in-memory settings.
@@ -33,10 +40,10 @@ Stored offsets, device IDs, discovery IDs and existing configuration choices are
 
 | File in the release | Purpose |
 |---|---|
-| **[`wthermostat-1.27.0.bin`](https://github.com/labodj/WThermostatBeca-labo/releases/download/v1.27.0/wthermostat-1.27.0.bin)** | Normal firmware for a supported thermostat; use this image for an ordinary upgrade. |
-| `wthermostat-1.27.0.bin.gz` | The same image compressed for OTA paths that support gzip; not for direct serial flashing. |
-| `wthermostat-minimal-1.27.0.bin` / `.bin.gz` | Temporary OTA bridge when space is insufficient. It has **no thermostat control, MQTT or clock**; replace it with normal firmware afterwards. |
-| `wthermostat-symbols-1.27.0.zip` | Matching normal ELF/MAP files for diagnosis, not a flash image. |
+| **[`wthermostat-1.27.1.bin`](https://github.com/labodj/WThermostatBeca-labo/releases/download/v1.27.1/wthermostat-1.27.1.bin)** | Normal firmware for a supported thermostat; use this image for an ordinary upgrade. |
+| `wthermostat-1.27.1.bin.gz` | The same image compressed for OTA paths that support gzip; not for direct serial flashing. |
+| `wthermostat-minimal-1.27.1.bin` / `.bin.gz` | Temporary OTA bridge when space is insufficient. It has **no thermostat control, MQTT or clock**; replace it with normal firmware afterwards. |
+| `wthermostat-symbols-1.27.1.zip` | Matching normal ELF/MAP files for diagnosis, not a flash image. |
 | `SHA256SUMS`, `BUILD-MANIFEST.json`, `SOURCE-MANIFEST.json` | Artifact checksums, build/image validation and source provenance. |
 
 The normal image is built for **ESP8266, 1 MiB flash, DOUT, 40 MHz flash / 80 MHz CPU**. Check the hardware before installation. Debug firmware is for development boards only: its UART log output conflicts with the thermostat MCU. It is not published as an installable thermostat image.
@@ -131,7 +138,7 @@ HTTP Digest authenticates requests but **does not encrypt HTTP traffic**. Use a 
 The command-line OTA uploader prompts for the password; it does not take a password argument. Replace the documentation address `192.0.2.10` with the device address:
 
 ```sh
-python pio/espupload.py --host 192.0.2.10 --file wthermostat-1.27.0.bin
+python pio/espupload.py --host 192.0.2.10 --file wthermostat-1.27.1.bin
 ```
 
 For unattended use, supply `WTHERMOSTAT_PASSWORD` through an appropriate protected environment. No device address is configured as a default upload destination.
@@ -235,7 +242,7 @@ Property writes use HTTP Digest PUT on the property endpoints. WebThings gateway
 
 ![Schedules](docs/images/interface/schedules.png)
 
-These screenshots show earlier labo builds. The current Network Configuration page also has **Keep saved WiFi password** and **Keep saved MQTT password** checkboxes.
+These screenshots show earlier labo builds, before the WThermostat-Labo display branding and Resync confirmation page. The current Network Configuration page also has **Keep saved WiFi password** and **Keep saved MQTT password** checkboxes.
 
 ## Build and test
 
@@ -256,7 +263,7 @@ python -m unittest discover -s tests -v
 pio run -e wthermostat
 ```
 
-The normal image is written to `build_output/firmware/wthermostat-1.27.0.bin`; matching ELF/MAP files are in `build_output/map/`. An optional `platformio_override.ini` can change local settings; copying the sample also overrides `appversion`, so remove or edit that sample value if you want the release filename.
+The normal image is written to `build_output/firmware/wthermostat-1.27.1.bin`; matching ELF/MAP files are in `build_output/map/`. An optional `platformio_override.ini` can change local settings; copying the sample also overrides `appversion`, so remove or edit that sample value if you want the release filename.
 
 | PlatformIO environment | Purpose |
 |---|---|
@@ -285,7 +292,7 @@ python3.14 -m venv /tmp/wthermostat-ha-tests
 /tmp/wthermostat-ha-tests/bin/python tests/homeassistant_schema.py
 ```
 
-The release has **99 native tests**, run locally at 64/32 bit with address/undefined-behavior sanitizers, plus two official HA tests and three firmware builds. The regressions cover UART command ordering, scheduling across midnight, ECO/BAC state, legacy configuration/identity migration, credential edge cases and documented timezone transitions.
+The release has **104 native tests**, run locally at 64/32 bit with address/undefined-behavior sanitizers, plus two official HA tests and three firmware builds. The regressions cover UART command ordering, scheduling across midnight, ECO/BAC state, legacy configuration/identity migration, credential edge cases and documented timezone transitions.
 
 GitHub Actions runs native tests, firmware builds and the packaged static check, with HA schemas in a separate job. Release packaging validates the normal/minimal ESP8266 image headers and checksums, checks gzip round trips, and includes normal symbols plus source/build manifests. Debug firmware stays in CI artifacts and is excluded from the installable release assets. Tagged push builds prepare a draft release package after both succeed; publishing and physical qualification are separate steps. Build artifacts are available from the [workflow runs](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml). The tagged workflow can also be dispatched explicitly. Local compilation is the validated starting point; old Gitpod instructions are not required.
 
