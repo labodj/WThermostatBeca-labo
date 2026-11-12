@@ -1,8 +1,6 @@
 """Core forms must remain protected and usable when external JavaScript fails."""
-
 import unittest
 from html.parser import HTMLParser
-
 from render_ui import render_pages
 
 

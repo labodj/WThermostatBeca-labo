@@ -1,8 +1,7 @@
 """Recovery access stays local and Digest explicitly uses UTF-8."""
 import unittest
-
-import test_regressions as native
-from test_regressions import NETWORK, method
+import native_support as native
+from native_support import NETWORK, method
 
 
 class NetworkRecoveryTests(unittest.TestCase):
@@ -33,7 +32,7 @@ int main(){Probe p;AsyncWebServerRequest r;p.requestAdminLogin(&r);
         self.compile_run(source, 'recovery_digest_challenge')
 
     def test_only_physical_configuration_callback_opens_local_login_recovery(self):
-        from test_regressions import ROOT
+        from native_support import ROOT
         main = (ROOT / 'WThermostat/WThermostat.cpp').read_text()
         self.assertIn('becaDevice->setOnConfigurationRequest([]() {\n        network->startLocalRecovery();', main)
         self.assertEqual(1, main.count('startLocalRecovery();'))

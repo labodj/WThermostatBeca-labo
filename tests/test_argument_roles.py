@@ -2,7 +2,8 @@
 from pathlib import Path
 import tempfile
 import unittest
-import test_regressions as regressions
+import native_support as regressions
+
 
 ROOT = Path(__file__).resolve().parents[1]
 

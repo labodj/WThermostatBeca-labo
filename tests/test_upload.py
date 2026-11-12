@@ -8,6 +8,7 @@ import unittest
 import urllib.request
 from unittest.mock import patch
 
+
 SPEC = importlib.util.spec_from_file_location("espupload", Path(__file__).resolve().parents[1] / "pio/espupload.py")
 UPLOAD = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UPLOAD)

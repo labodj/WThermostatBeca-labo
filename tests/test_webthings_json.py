@@ -1,10 +1,8 @@
 """HTTP JSON must be complete or return a storage/allocation error."""
-
 import re
 import unittest
-
-import test_regressions as native
-from test_regressions import BECA, NETWORK, ROOT, method
+import native_support as native
+from native_support import BECA, NETWORK, ROOT, method
 
 
 class WebThingsResponseTests(unittest.TestCase):

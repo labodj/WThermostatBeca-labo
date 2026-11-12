@@ -38,6 +38,10 @@ public:
 		json->propertyDouble(STR_MAXIMUM, this->getMaximum());
 	}
 
+    bool isValidValue(const String& value) override {
+        return WProperty::isValidValue(value) && value.toDouble() >= minimum && value.toDouble() <= maximum;
+    }
+
 protected:
 
 private:

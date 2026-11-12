@@ -1,8 +1,7 @@
 """The optional admin gate preserves legacy defaults and EEPROM layout."""
 import unittest
-
-import test_regressions as native
-from test_regressions import NETWORK, method
+import native_support as native
+from native_support import NETWORK, method
 
 
 class OptionalAuthTests(unittest.TestCase):

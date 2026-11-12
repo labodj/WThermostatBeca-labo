@@ -38,6 +38,10 @@ public:
 		json->propertyInteger(STR_MAXIMUM, this->getMaximum());
 	}
 
+    bool isValidValue(const String& value) override {
+        return WProperty::isValidValue(value) && value.toInt() >= minimum && value.toInt() <= maximum;
+    }
+
 protected:
 
 private:

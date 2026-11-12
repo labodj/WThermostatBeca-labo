@@ -88,6 +88,8 @@ public:
 
 	WJson& endArray() {
 		stream->print(BEND);
+		firstElement = false;
+		separatorAlreadyCalled = false;
 		return *this;
 	}
 

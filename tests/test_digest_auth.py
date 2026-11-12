@@ -1,11 +1,9 @@
 """Test the boot-local replay guard with the pinned verifier and hashlib vectors."""
-
 import hashlib
 import json
 import unittest
-
-import test_regressions as native
-from test_regressions import ROOT, method
+import native_support as native
+from native_support import ROOT, method
 
 
 class DigestAuthTests(unittest.TestCase):

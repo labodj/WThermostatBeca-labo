@@ -257,6 +257,8 @@ public:
 	}
 
 	void add(WProperty* property) {
+        // A transaction snapshots a fixed registration layout.
+        if (updating) return;
 		if (!exists(property)) {
 			WSettingItem* settingItem = addSetting(property);
 			//really load setting only from eeprom if not in updating mode
@@ -329,6 +331,7 @@ public:
 	WProperty* setBoolean(const char* id, bool value) {
 		WProperty* setting = getSetting(id);
 		if (setting == nullptr) {
+            if (updating) return nullptr;
 			setting = new WProperty(id, id, BOOLEAN);
 			setting->setBoolean(value);
 			add(setting);
@@ -346,6 +349,7 @@ public:
 	WProperty* setByte(const char* id, byte value) {
 		WProperty* setting = getSetting(id);
 		if (setting == nullptr) {
+            if (updating) return nullptr;
 			setting = new WProperty(id, id, BYTE);
 			setting->setByte(value);
 			add(setting);
@@ -363,6 +367,7 @@ public:
 	WProperty* setInteger(const char* id, int value) {
 		WProperty* setting = getSetting(id);
 		if (setting == nullptr) {
+            if (updating) return nullptr;
 			setting = new WProperty(id, id, INTEGER);
 			setting->setInteger(value);
 			add(setting);
@@ -380,6 +385,7 @@ public:
 	WProperty* setLong(const char* id, long value) {
 		WProperty* setting = getSetting(id);
 		if (setting == nullptr) {
+            if (updating) return nullptr;
 			setting = new WProperty(id, id, LONG);
 			setting->setLong(value);
 			add(setting);
@@ -397,6 +403,7 @@ public:
 	WProperty* setUnsignedLong(const char* id, unsigned long value) {
 		WProperty* setting = getSetting(id);
 		if (setting == nullptr) {
+            if (updating) return nullptr;
 			setting = new WProperty(id, id, UNSIGNED_LONG);
 			setting->setUnsignedLong(value);
 			add(setting);
@@ -414,6 +421,7 @@ public:
 	WProperty* setDouble(const char* id, double value) {
 		WProperty* setting = getSetting(id);
 		if (setting == nullptr) {
+            if (updating) return nullptr;
 			setting = new WProperty(id, id, DOUBLE);
 			setting->setDouble(value);
 			add(setting);
@@ -436,6 +444,7 @@ public:
 	WProperty* setString(const char* id, byte length, const char* value) {
 		WProperty* setting = getSetting(id);
 		if (setting == nullptr) {
+            if (updating) return nullptr;
 			setting = new WStringProperty(id, id, length);
 			setting->setString(value);
 			add(setting);

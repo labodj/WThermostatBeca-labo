@@ -384,6 +384,7 @@ public:
 		WDevice *device = firstDevice;
 		while (device != nullptr) {
 			device->loop(millis());
+			now = millis();
 #ifndef MINIMAL
 			if ((this->isMqttConnected()) && (this->isSupportingMqtt())
 					&& ((device->lastStateNotify == 0)
@@ -974,6 +975,7 @@ public:
 	void initWebserverInitHooks(AsyncWebServer *webServer){
 		WDevice *device = this->firstDevice;
 		while (device != nullptr) {
+			device->bindWebServerCalls(webServer);
 			device->webserverInitHook(webServer);
 			device = device->next;
 		}
@@ -1386,8 +1388,9 @@ private:
 				device->toJsonValues(&json, MQTT);
 				json.endObject();
 								
-				if (mqttClient->publish(topic.c_str(), response->c_str(), device->isMqttRetain())) {
-					wlog->verbose(F("MQTT sent"));
+				if (!publishMqtt(topic.c_str(), response->c_str(), device->isMqttRetain())) {
+					device->lastStateNotify = 0;
+					return;
 				}
 				device->lastStateNotify = millis();
 				// send single values
@@ -1440,13 +1443,12 @@ private:
 								if (length > 0) {
 									//Check, if it's only response to a state before
 									wlog->notice(F("Set several properties for device %s"), device->getId());
-									WJsonParser* parser = new WJsonParser();
-									if (parser->parse(payloadS.c_str(), device) == nullptr) {
+									WJsonParser parser;
+									if (parser.parse(payloadS.c_str(), device) == nullptr) {
 										wlog->warning(F("No properties updated for device %s"), device->getId());
 									} else {
 										wlog->trace(F("One or more properties updated for device %s"), device->getId());
 									}
-									delete parser;
 								} else {
 									wlog->notice(F("Empty payload for topic 'properties' -> send device state..."));
 									//Empty payload for topic 'properties' ->  just send state (below)
@@ -1531,7 +1533,10 @@ private:
 				//Subscribe to device specific topic
 				String subscribeTopic=String(String(getMqttTopic()) + "/" + String(MQTT_CMND) + "/#");
 				wlog->notice(F("Subscribing to Topic %s"),subscribeTopic.c_str());
-				mqttClient->subscribe(subscribeTopic.c_str());
+				if (!mqttClient->subscribe(subscribeTopic.c_str())) {
+                    mqttClient->disconnect();
+                    return false;
+                }
 				logHeap(PSTR("topicSubscribe"));
 				notify(false);
 
@@ -1855,6 +1860,9 @@ private:
             if (!valid) return;
             if (!saved) { request->send(500, CT_TEXT_PLAIN, "Failed to save device settings; changes not applied"); return; }
 			if (device->isConfigNeedsReboot()){
+#ifndef MINIMAL
+				if (device->isMainDevice()) sendMqttHassAutodiscover(true);
+#endif
 				wlog->notice(F("Reboot"));
 				this->restart(request, F("Device settings saved."));
 			} else {

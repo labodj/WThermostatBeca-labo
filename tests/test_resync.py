@@ -1,7 +1,6 @@
 """Run the real resync page callbacks without accessing a thermostat."""
 import unittest
-
-import test_regressions as native
+import native_support as native
 
 
 class ResyncTests(unittest.TestCase):

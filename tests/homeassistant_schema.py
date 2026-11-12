@@ -6,13 +6,10 @@ from copy import deepcopy
 import json
 import tempfile
 import unittest
-
 import probatio
-
 from homeassistant.components.mqtt import climate, discovery, sensor
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.template import Template
-
 from test_homeassistant import discovery_records
 
 

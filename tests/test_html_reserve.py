@@ -1,8 +1,6 @@
 """Leave transport/header capacity while constructing the next large page."""
-
 import unittest
-
-import test_regressions as native
+import native_support as native
 
 
 class HtmlReserveTests(unittest.TestCase):

@@ -1,7 +1,6 @@
 """WebLog connection status reflects the actual saved logging level."""
 import unittest
-
-import test_regressions as native
+import native_support as native
 
 
 class WebLogStatusTests(unittest.TestCase):

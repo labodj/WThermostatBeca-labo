@@ -5,15 +5,13 @@ This preview never forwards requests to a device. POST requests are rejected.
 import argparse
 import configparser
 import json
-import os
 import re
 import subprocess
 import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
-
-from test_regressions import BECA, NETWORK, ROOT, method
+from native_support import compiler, BECA, NETWORK, ROOT, method
 
 
 def raw_asset(path, name):
@@ -23,7 +21,7 @@ def raw_asset(path, name):
     return match.group(1)
 
 
-def render_pages(response_heap_budget=0, largest_heap_block=24000, response_allocation_fails=False, fail_header_write=False):
+def render_pages(response_heap_budget=0, largest_heap_block=24000, response_allocation_fails=False, fail_header_write=False, schedules_ready=True):
     beca = BECA.read_text()
     network = NETWORK.read_text()
     log = ROOT / "WThermostat/WLogDevice.h"
@@ -125,7 +123,7 @@ struct Beca{
     Value*deviceOn=&value,*actualTemperature=&value,*actualFloorTemperature=&value,*targetTemperature=&value,*ecoMode=&value;
     unsigned long lastHeartBeat=0,lastTimeRequested=0,lastTimeSent=0;
     int model=0;float factor=2;Beca(Net*n):network(n){}const char*getId(){return "thermostat";}
-    bool isMcuInitialized(){return true;}
+    bool isMcuInitialized(){return true;}bool receivedSchedules(){return SCHEDULES_READY;}
     int getThermostatModel(){return model;}float getTemperatureFactor(){return factor;}
     bool isSupportingHeatingRelay(){return false;}bool isSupportingCoolingRelay(){return false;}
     byte getSchedulesDayOffset(){return 0;}String getSchedulesValue(const char*key){return key[2]=='h'?"06:00":"20.0";}
@@ -187,7 +185,7 @@ int main(){
     {AsyncWebServerRequest r;beca.model=1;net.handleHttpInfo(&r);emit("/info-bac",r);}
 }
 '''
-    source = '#include <new>\n#define MAX_BLOCK ' + str(int(largest_heap_block)) + 'U\n#define FAIL_RESPONSE ' + str(int(response_allocation_fails)) + '\n' + '#define FAIL_HEADER_WRITE ' + str(int(fail_header_write)) + '\n#define HEAP_BUDGET ' + str(int(response_heap_budget)) + 'U\n' + source
+    source = '#define SCHEDULES_READY ' + str(int(schedules_ready)) + '\n' + '#include <new>\n#define MAX_BLOCK ' + str(int(largest_heap_block)) + 'U\n#define FAIL_RESPONSE ' + str(int(response_allocation_fails)) + '\n' + '#define FAIL_HEADER_WRITE ' + str(int(fail_header_write)) + '\n#define HEAP_BUDGET ' + str(int(response_heap_budget)) + 'U\n' + source
     config = configparser.ConfigParser(interpolation=None)
     config.read([ROOT / "platformio.ini", ROOT / "platformio_override.ini"])
     source = '#define PREVIEW_VERSION ' + json.dumps(config["common"]["appversion"]) + '\n' + source
@@ -195,7 +193,7 @@ int main(){
         cpp = Path(directory) / "preview.cpp"
         binary = Path(directory) / "preview"
         cpp.write_text(source)
-        subprocess.run([os.environ.get("CXX", "g++"), "-std=c++17", "-I", str(ROOT / "tests/native"),
+        subprocess.run(compiler() + ["-std=c++17", "-I", str(ROOT / "tests/native"),
                         "-I", str(ROOT), str(cpp), "-o", str(binary)], check=True)
         result = subprocess.check_output([str(binary)], text=True)
     pages = dict(record.split("\n", 1) for record in result.split("\x1e") if record)

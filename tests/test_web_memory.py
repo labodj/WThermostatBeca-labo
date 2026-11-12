@@ -1,10 +1,8 @@
 """Exercise production HTTP allocation decisions, including cold-cache assets."""
-
 import unittest
-
-import test_regressions as native
+import native_support as native
 from render_ui import render_pages
-from test_regressions import NETWORK, method
+from native_support import NETWORK, method
 
 
 class WebMemoryTests(unittest.TestCase):
@@ -106,7 +104,7 @@ int main(){Probe p;
         import json
 
         from render_ui import raw_asset
-        from test_regressions import ROOT
+        from native_support import ROOT
 
         text = NETWORK.read_text()
         static_methods = text[

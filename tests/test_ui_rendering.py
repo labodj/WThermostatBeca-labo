@@ -5,7 +5,6 @@ import shutil
 import subprocess
 import unittest
 from html.parser import HTMLParser
-
 from render_ui import ROOT, raw_asset, render_pages
 
 

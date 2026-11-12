@@ -1,8 +1,7 @@
 """Legacy network values survive migration without moving existing EEPROM fields."""
 import unittest
-
-import test_regressions as native
-from test_regressions import BECA, NETWORK, method
+import native_support as native
+from native_support import BECA, NETWORK, method
 
 
 class NetworkStringTests(unittest.TestCase):

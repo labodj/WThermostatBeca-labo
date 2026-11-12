@@ -580,6 +580,7 @@ public:
 		// Pages
 		WPage * schedulePage=new WPage(ID_PAGE_SCHEDULE, TITLE_PAGE_SCHEDULE);
 		schedulePage->setPrintPage([this,schedulePage](AsyncWebServerRequest* request, WCheckedPrint* page) {
+			if (!receivedSchedules()) { page->print(F("Schedules are not available yet; waiting for the controller.")); return; }
 			this->network->log()->notice(PSTR("Schedules"));
 			page->format(HTTP_CONFIG_PAGE_BEGIN, ((String)getId()+"_"+schedulePage->getId()).c_str(), this->network->getCsrfToken());
 			page->print(FPSTR(HTTP_CONFIG_SCHTAB_HEAD));
@@ -609,6 +610,7 @@ public:
 
 		});
 		schedulePage->setSubmittedPage([this,schedulePage](AsyncWebServerRequest* request, WCheckedPrint* page) {
+			if (!receivedSchedules()) { page->print(F("Schedules are not available yet; no changes saved.")); return; }
 			this->network->log()->notice(PSTR("submitted"));
             byte previous[sizeof(schedules)];
             memcpy(previous, schedules, sizeof(schedules));
@@ -743,7 +745,6 @@ public:
             request->send(400, "text/plain", "Invalid thermostat configuration");
             return;
         }
-        network->sendMqttHassAutodiscover(true);
         network->log()->notice(PSTR("Save Beca config page"));
         this->thermostatModel->setByte(getValueOrEmpty(request, "tm").toInt());
         this->schedulesDayOffset->setByte(getValueOrEmpty(request, "ws").toInt());
@@ -995,6 +996,7 @@ public:
 		network->log()->notice(F("handleUnknownMqttCallback %s|%s|%s" ), stat_topic.c_str(), partialTopic.c_str(), payload.c_str());
 		// {"log":"handleUnknownMqttCallback home/test/stat/things/thermostat/properties / schedules / "}
     	if (partialTopic.startsWith(SCHEDULES)) {
+            if (!receivedSchedules()) return;
 		const String scheduleTopic = partialTopic.substring(SCHEDULES.length() + 1);
 		if (scheduleTopic.equals("")) {
 				if (length == 0) {
@@ -1046,6 +1048,7 @@ public:
     }
 
 	void sendSchedulesToMqtt(){
+        if (!receivedSchedules()) return;
 		WStringStream* response = network->getMQTTResponseStream();
 		WJson json(response);
 		json.beginObject();
@@ -1155,6 +1158,7 @@ public:
     }
 
     void sendSchedules(AsyncWebServerRequest* request) {
+        if (!receivedSchedules()) { request->send(503, APPLICATION_JSON, "{\"error\":\"Schedules not available\"}"); return; }
     	WStringStream* response = network->getMQTTResponseStream();
     	WJson json(response);
     	json.beginObject();
@@ -1587,12 +1591,12 @@ private:
 	WProperty* schedulesMode;
 	WProperty* holdState;
     WProperty* systemMode;
-    WProperty* fanMode;
+    WProperty* fanMode = nullptr;
     WProperty* ecoMode;
     WProperty* locked;
 	WProperty *becaBits1;
 	WProperty *becaBits2;
-    byte schedules[54];
+    byte schedules[54]{};
     boolean receivedStates[STATE_COMPLETE];
     byte schedulesDataPoint;
     WProperty* thermostatModel;

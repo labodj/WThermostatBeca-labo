@@ -1,8 +1,6 @@
 """Reject an SDK association that does not match the saved AP lock."""
-
 import unittest
-
-import test_regressions as native
+import native_support as native
 
 
 class BssidRuntimeTests(unittest.TestCase):

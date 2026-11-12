@@ -26,6 +26,13 @@ int main(){
     assert(!mode.parse("invalid"));assert(mode.parse("heat"));
     assert(!power.parse("garbage"));assert(power.parse("false"));assert(!power.getBoolean());
     WProperty number("n","N",INTEGER);assert(!number.parse("12oops"));assert(!number.parse("40000"));assert(number.parse("-12"));
+    WProperty counter("counter","Counter",UNSIGNED_LONG);
+    counter.setUnsignedLong(7);
+    for(const char* invalid:{"-1"," -1","\t-1","\r\n-1","4294967296"}){
+        assert(!counter.parse(invalid));assert(counter.getUnsignedLong()==7);
+    }
+    assert(counter.parse("4294967295")&&counter.getUnsignedLong()==UINT32_MAX);
+    assert(counter.parse(" 0")&&counter.getUnsignedLong()==0);
     int emitted=0;std::string text;
     assert(parser.parse("{\"s\":\"caf\\u00e9\"}",[&](const char*,const char* value){++emitted;text=value;}));
     assert(text=="caf\xc3\xa9" && emitted==1);

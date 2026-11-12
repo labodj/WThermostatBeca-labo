@@ -37,8 +37,12 @@ jobs:
       - name: Install pinned dependencies for Digest and transport integration tests
         run: |
           pio pkg install -e wthermostat
+      - name: Native test compiler (64-bit and 32-bit)
+        run: sudo apt-get update && sudo apt-get install -y g++-multilib
       - name: Native regression tests
-        run: python -m unittest discover -s tests -v
+        run: |
+          python -m unittest discover -s tests -v
+          CXX="g++ -m32" python -m unittest discover -s tests -v
       - name: Firmware version
         id: version
         shell: bash

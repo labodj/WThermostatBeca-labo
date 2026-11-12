@@ -1,8 +1,6 @@
 """Exercise bounded segmented page storage, early release and allocation failures."""
-
 import unittest
-
-import test_regressions as native
+import native_support as native
 
 
 class PageResponseTests(unittest.TestCase):

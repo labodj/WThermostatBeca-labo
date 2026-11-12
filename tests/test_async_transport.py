@@ -1,11 +1,10 @@
 """Exercise the installed server's transport code with bounded TCP space and retries."""
-
 import os
 import re
 import unittest
 from pathlib import Path
+import native_support as native
 
-import test_regressions as native
 
 SDK = native.ROOT / ".pio/libdeps/wthermostat/ESPAsyncWebServer/src/WebResponses.cpp"
 TCP = native.tcp_source()

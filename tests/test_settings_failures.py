@@ -1,9 +1,8 @@
 """Actual settings and HTTP save handlers must report failed writes accurately."""
-
 import unittest
-
-import test_regressions as native
-from test_regressions import NETWORK, method
+import native_support as native
+from native_support import NETWORK, method, ROOT
+import native_support as regressions
 
 
 class SettingsFailureTests(unittest.TestCase):
@@ -23,11 +22,13 @@ struct WDevice{
  WSettings* settings;bool reject=false,reboot=true;
  const char*getId(){return "probe";}
  bool isConfigNeedsReboot(){return reboot;}
+ bool isMainDevice(){return false;}
  void saveConfigPage(AsyncWebServerRequest* r){settings->setByte("byte",10);settings->setString("text","changed");if(reject)r->send(400);}
 };
 struct Probe{
  Print output;WLog log{0,0,&output};WLog*wlog=&log;WSettings store{&log,0xf1,false};WSettings*settings=&store;
  bool restarted=false;bool isWebServerRunning(){return true;}
+ void sendMqttHassAutodiscover(bool){}
  void restart(AsyncWebServerRequest*,const __FlashStringHelper*){restarted=true;}
  void webReturnStatusPage(AsyncWebServerRequest*r,const __FlashStringHelper*,const char*){r->send(200);}
  Probe(){store.reallyReadSettings=false;store.setByte("byte",7);store.setString("text","original");assert(store.save());}
@@ -79,7 +80,7 @@ int main(){
         self.compile_run(source, "migration_autosave")
 
     def test_logging_filters_follow_rolled_back_storage(self):
-        from test_regressions import ROOT
+        from native_support import ROOT
 
         device = ROOT / "WThermostat/WLogDevice.h"
         text = device.read_text()
@@ -142,3 +143,61 @@ int main(){
 }
 """
         self.compile_run(source, "logging_rollback")
+
+    def test_transaction_registration_is_rejected_without_changing_storage(self):
+        self.compile_run(r'''
+#include "Stream.h"
+#include "lib/WAdapter/WAdapter/WStringProperty.h"
+#include "lib/WAdapter/WAdapter/WSettings.h"
+int main(){
+ EEPROM.bytes.fill(0xff);Print output;WLog log(0,0,&output);WSettings store(&log,0xf1,false);
+ store.reallyReadSettings=false;store.setByte("existing",1);assert(store.save());const auto before=EEPROM.bytes;
+ for(bool commit:{false,true}){
+  assert(store.beginUpdate());assert(store.setByte("existing",2));
+  assert(!store.setBoolean("boolean",true));assert(!store.setByte("byte",2));
+  assert(!store.setInteger("integer",3));assert(!store.setLong("long",4));
+  assert(!store.setUnsignedLong("unsigned",5));assert(!store.setDouble("double",6));
+  assert(!store.setString("string","text"));assert(!store.setString("sized",8,"text"));
+  WProperty external("external","External",BYTE);store.add(&external);assert(!store.existsSetting("external"));
+  assert(store.endUpdate(commit)==commit);assert(store.getByte("existing")==byte(commit?2:1));
+  if(!commit)assert(EEPROM.bytes==before);
+ }
+ assert(store.setByte("new",3));assert(store.save());
+}
+''', 'fixed_transaction_layout')
+
+    def test_logging_levels_and_defaults_remain_compatible(self):
+        log_device = ROOT / "WThermostat/WLogDevice.h"
+        text = log_device.read_text()
+        levels = "\n".join(line for line in (ROOT / "lib/WAdapter/WAdapter/WLog.h").read_text().splitlines()
+                           if line.startswith("#define LOG_LEVEL_"))
+        modes = text[text.index("const char* LOG_MODE_SILENT"):text.index("const char* URI_WSLOG")]
+        source = '#include "properties.h"\n' + levels + "\n" + modes + r'''
+struct Log{int level=0;void setLevelNetwork(int value){level=value;}};
+struct Net{Log output;Log*log(){return &output;}};
+struct Probe{
+    int mqtt=0,web=0;Net net;Net*network=&net;
+    void setlogLevelByte(byte value){mqtt=value;}
+    void setlogLevelWebByte(byte value){web=value;}
+    byte getlogLevelByte(){return mqtt;}
+    byte getlogLevelWebByte(){return web;}
+'''
+        for name in ["setMinLogLevel", "onlogLevelMqttChange", "onlogLevelWebChange", "logLevelByteToString"]:
+            source += regressions.method(log_device, name) + "\n"
+        source += r'''
+};
+int main(){
+    Probe p;WProperty mode("mode","Mode",STRING);
+    const char* modes[]={"silent","fatal","error","warning","notice","trace","verbose"};
+    for(unsigned i=0;i<7;++i){
+        mode.setString(modes[i]);p.onlogLevelMqttChange(&mode);p.onlogLevelWebChange(&mode);
+        assert(p.mqtt==int(i)&&p.web==int(i)&&!strcmp(p.logLevelByteToString(i),modes[i]));
+    }
+    mode.setString("invalid");p.onlogLevelMqttChange(&mode);p.onlogLevelWebChange(&mode);
+    assert(p.mqtt==0&&p.web==0&&!strcmp(p.logLevelByteToString(255),"silent"));
+    p.mqtt=2;p.web=6;p.setMinLogLevel();assert(p.net.output.level==6);
+    p.mqtt=5;p.web=1;p.setMinLogLevel();assert(p.net.output.level==5);
+    puts("PASS all log levels, channel routing and silent defaults");
+}
+'''
+        self.compile_run(source, "maintenance_logging")

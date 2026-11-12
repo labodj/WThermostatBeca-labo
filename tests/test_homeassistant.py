@@ -1,14 +1,13 @@
 """Exercise the emitted discovery messages, not a copy of their JSON templates."""
 from functools import lru_cache
 import json
-import os
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-
-import test_regressions as regressions
-from test_regressions import BECA, NETWORK, ROOT, method
+import native_support as regressions
+from native_support import compiler, BECA, NETWORK, ROOT, method
+import re
 
 
 @lru_cache(maxsize=1)
@@ -67,7 +66,7 @@ int main(){
         cpp = Path(directory) / "discovery.cpp"
         binary = Path(directory) / "discovery"
         cpp.write_text(source)
-        subprocess.run([os.environ.get("CXX", "g++"), "-std=c++17", "-I", str(ROOT / "tests/native"),
+        subprocess.run(compiler() + ["-std=c++17", "-I", str(ROOT / "tests/native"),
                         "-I", str(ROOT), "-fsanitize=address,undefined", "-fno-sanitize-recover=all",
                         str(cpp), "-o", str(binary)], check=True)
         result = subprocess.run([str(binary)], capture_output=True, text=True, check=True, timeout=30)
@@ -140,10 +139,10 @@ struct WDevice{
 struct Log{template<class...T>void notice(T...){}template<class...T>void trace(T...){}template<class...T>void warning(T...){}};
 struct Ip{String toString(){return "192.0.2.1";}};
 struct Client{
-    bool live=false,subscribeOk=true;unsigned connects=0;std::vector<std::string>subscriptions;
+    bool live=false,subscribeOk=true,commandsOk=true;unsigned connects=0;std::vector<std::string>subscriptions;
     bool connected(){return live;}void setServer(const char*,int){}
     template<class...T>bool connect(T...){++connects;live=true;return true;}
-    bool subscribe(const char*topic){subscriptions.emplace_back(topic);return strcmp(topic,"homeassistant/status")||subscribeOk;}
+    bool subscribe(const char*topic){subscriptions.emplace_back(topic);if(strstr(topic,"/cmnd/"))return commandsOk;return strcmp(topic,"homeassistant/status")||subscribeOk;}
     void unsubscribe(const char*){}void disconnect(){live=false;}int state(){return 0;}
     bool publish(const char*,const char*,bool=false){return true;}
 };
@@ -194,6 +193,9 @@ int main(){
     p.enabled=false;p.mqttCallback(birth,online,6);assert(!p.hassDiscoveryPending);
     Probe disabled;disabled.enabled=false;assert(disabled.mqttReconnect());
     assert(!disabled.hassDiscoveryPending&&std::find(disabled.client.subscriptions.begin(),disabled.client.subscriptions.end(),"homeassistant/status")==disabled.client.subscriptions.end());
+    Probe commandsDenied;commandsDenied.client.commandsOk=false;
+    assert(!commandsDenied.mqttReconnect()&&!commandsDenied.client.live&&!commandsDenied.hassDiscoveryPending);
+    commandsDenied.client.commandsOk=true;assert(commandsDenied.mqttReconnect()&&commandsDenied.client.connects==2);
     Probe denied;denied.client.subscribeOk=false;assert(!denied.mqttReconnect()&&!denied.client.live);
     p.enabled=true;testMillis=ULONG_MAX-500;p.requestHassDiscovery();p.serviceHassDiscovery(498);assert(p.discoveries==5);
     p.serviceHassDiscovery(499);assert(p.discoveries==6);
@@ -204,6 +206,41 @@ int main(){
 }
 '''
         self.compile_run(source, "ha_lifecycle")
+
+    def test_actual_thermostat_discovery_removal_follows_successful_commit(self):
+        constants = '\n'.join(re.findall(r'^const byte BECABITS[^\n]+', BECA.read_text(), re.M))
+        source = r'''
+#include "Stream.h"
+#include "lib/WAdapter/WAdapter/WStringProperty.h"
+#include "lib/WAdapter/WAdapter/WSettings.h"
+const char*HTTP_TRUE="true",*CT_TEXT_PLAIN="text/plain";
+struct AsyncWebServerRequest{int status=0;bool isSent(){return status!=0;}void send(int s,const char* =nullptr,const char* =nullptr){status=s;}};
+String getValueOrEmpty(AsyncWebServerRequest*,const char*key){if(!strcmp(key,"tm"))return "1";if(!strcmp(key,"ws"))return "0";if(!strcmp(key,"tp"))return "05";if(!strcmp(key,"rs"))return "_";if(!strcmp(key,"dz"))return "1";return "";}
+struct WDevice;
+struct Net{Print output;WLog logger{0,0,&output};WLog*wlog=&logger;WSettings store{&logger,0xf1,false};WSettings*settings=&store;
+ unsigned removals=0;bool restarted=false;WLog*log(){return &logger;}bool isWebServerRunning(){return true;}
+ void sendMqttHassAutodiscover(bool remove){if(remove)++removals;}
+ void restart(AsyncWebServerRequest*,const __FlashStringHelper*){restarted=true;}
+ void webReturnStatusPage(AsyncWebServerRequest*r,const __FlashStringHelper*,const char*){r->send(200);}
+ void handleHttpSaveDeviceConfiguration(AsyncWebServerRequest*,WDevice*);
+};
+''' + constants + r'''
+struct WDevice{Net*network;bool main=true;WProperty *thermostatModel,*schedulesDayOffset,*becaBits1,*becaBits2,*deadzoneTemp;
+ WDevice(Net*n):network(n){auto&settings=n->store;settings.reallyReadSettings=false;
+ thermostatModel=settings.setByte("model",0);schedulesDayOffset=settings.setByte("offset",0);becaBits1=settings.setByte("bits1",0);becaBits2=settings.setByte("bits2",0);deadzoneTemp=settings.setByte("deadzone",1);assert(settings.save());}
+ const char*getId(){return "thermostat";}bool isMainDevice(){return main;}bool isConfigNeedsReboot(){return true;}
+''' + method(BECA, 'saveConfigPage') + r'''
+};
+''' + method(NETWORK, 'handleHttpSaveDeviceConfiguration').replace('void handleHttpSaveDeviceConfiguration', 'void Net::handleHttpSaveDeviceConfiguration', 1) + r'''
+int main(){EEPROM.bytes.fill(0xff);Net n;WDevice d(&n);const auto before=EEPROM.bytes;
+ EEPROM.failCommits=1;AsyncWebServerRequest failed;n.handleHttpSaveDeviceConfiguration(&failed,&d);
+ assert(failed.status==500&&!n.restarted&&n.removals==0&&EEPROM.bytes==before&&d.thermostatModel->getByte()==0);
+ n.store.writesEnabled=true;AsyncWebServerRequest good;n.handleHttpSaveDeviceConfiguration(&good,&d);
+ assert(n.restarted&&n.removals==1&&d.thermostatModel->getByte()==1);
+ n.restarted=false;d.main=false;AsyncWebServerRequest other;n.handleHttpSaveDeviceConfiguration(&other,&d);assert(n.restarted&&n.removals==1);
+}
+'''
+        self.compile_run(source, 'committed_thermostat_discovery')
 
 
 if __name__ == "__main__":

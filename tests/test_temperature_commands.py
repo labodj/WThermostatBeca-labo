@@ -1,8 +1,7 @@
 """End-to-end property callbacks must send mode and requested setpoint to the MCU."""
 import unittest
-
-import test_regressions as native
-from test_regressions import BECA, method
+import native_support as native
+from native_support import BECA, method
 
 
 class TemperatureCommandTests(unittest.TestCase):

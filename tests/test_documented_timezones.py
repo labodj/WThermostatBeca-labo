@@ -3,9 +3,8 @@ import json
 import unittest
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
-
-import test_regressions as native
-from test_regressions import ROOT, method
+import native_support as native
+from native_support import ROOT, method
 
 
 class DocumentedTimezoneTests(unittest.TestCase):

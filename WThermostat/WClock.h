@@ -208,7 +208,7 @@ class WClock : public WDevice {
         if (isValidTime() && !(now - lastNtpSync < (ntpInvalidateHours * 60UL * 60 * 1000) )){
             network->log()->error(F("No valid NTP Time since %d hours -> invalidating"), ntpInvalidateHours);
         }
-        validTime->setBoolean((lastNtpSync > 0) && (now - lastNtpSync < (ntpInvalidateHours * 60UL * 60 * 1000)));
+        if (now - lastNtpSync >= ntpInvalidateHours * 60UL * 60 * 1000) validTime->setBoolean(false);
 
         Rtc.utc_time=getEpochTime();
         // calc retry - faster 3 minutes after boot

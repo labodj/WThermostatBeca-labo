@@ -1,8 +1,6 @@
 """A synchronous lwIP error callback may destroy the aborting client."""
-
 import unittest
-
-import test_regressions as native
+import native_support as native
 
 
 class TcpAbortTests(unittest.TestCase):

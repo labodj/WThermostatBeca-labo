@@ -190,7 +190,9 @@ public:
 				(multipleOf <= 0 || fabs(number / multipleOf - round(number / multipleOf)) < 0.001);
 		}
 		if (type == UNSIGNED_LONG) {
-			if (text.charAt(0) == '-') return false;
+			const char* first = text.c_str();
+            while (isspace(static_cast<unsigned char>(*first))) ++first;
+            if (*first == '-') return false;
 			const unsigned long number = strtoul(text.c_str(), &end, 10);
 			return !errno && *end == 0 && end != text.c_str() && number <= UINT32_MAX;
 		}
@@ -407,7 +409,7 @@ public:
 				if (l > length) {
 					l = length;
 				}
-				strncpy(value.string, newValue, l);
+				memmove(value.string, newValue, l);
 				value.string[l] = '\0';
 				this->valueNull = false;
 			} else {
@@ -473,7 +475,6 @@ public:
 	}
 
 	virtual void toJsonValue(WJson* json, bool onlyValue=false) {
-		requestValue();
 		const char* memberName = (onlyValue ? nullptr : getId());
 		switch (getType()) {
 		case BOOLEAN:
@@ -738,7 +739,7 @@ private:
 
 
 	void requestValue() {
-		if ((!notifying) && (onValueRequest)) {
+		if (!notifying && !valueRequesting && onValueRequest) {
 			valueRequesting = true;
 			onValueRequest(this);
 			valueRequesting = false;

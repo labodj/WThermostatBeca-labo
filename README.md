@@ -18,7 +18,7 @@ This fork retains the original local web, MQTT and thermostat-controller model, 
 - **Thermostat behavior:** corrected automatic/manual and ECO transitions, BAC cooling/fan state reporting, schedule handling across midnight, and state refresh after power/mode changes. Temperature precision and controller-specific behavior remain configurable.
 - **Clock and messaging:** more reliable DST transitions and timer rollover handling, validated MQTT command batches, bounded UART/JSON parsing and complete WebThings responses.
 - **Web interface and transport:** WThermostat-Labo branding and project links, clearer diagnostics and logging status, bounded response buffers, WebLog backpressure and fixes for partial TCP writes and buffer lifetimes on the ESP8266.
-- **Maintenance:** pinned dependencies, versioned transport-library forks without build-time patches, native regression tests, architecture-aware static analysis and CI-built release packages with checksums and source/build manifests.
+- **Maintenance:** pinned dependencies, a maintained ESP8266 TCP fork without build-time patches, native regression tests, architecture-aware static analysis and CI-built release packages with checksums and source/build manifests.
 
 Supported hardware, setup and recovery instructions are below. Individual release changes belong in the [release notes](https://github.com/labodj/WThermostatBeca-labo/releases).
 
@@ -143,7 +143,7 @@ Use MQTT discovery rather than copying the old `climate: - platform: mqtt` examp
 3. Use the supported defaults: discovery prefix **`homeassistant`** and Home Assistant Birth topic **`homeassistant/status`** with payload **`online`**. Custom prefixes/Birth topics are not automatically detected by this firmware.
 4. Check the MQTT device/entities in Home Assistant. Climate availability also waits for a complete valid MCU state, avoiding incomplete startup readings.
 
-Discovery includes climate, schedules/diagnostics and the applicable optional floor-temperature entity. Existing supported entity IDs are retained. The firmware republishes discovery and retained state after MQTT reconnection and supported HA Birth events, retries failed discovery and clears obsolete configurations. A thermostat reboot is not required for every HA restart.
+Discovery includes climate, temperature sensors, network diagnostics and the applicable optional floor-temperature entity. Existing supported entity IDs are retained. The firmware republishes discovery and retained state after MQTT reconnection and supported HA Birth events, retries failed discovery and clears obsolete configurations. A thermostat reboot is not required for every HA restart.
 
 Broker persistence remains useful for retained messages across broker restarts, but does not replace correct broker/thermostat connectivity. Consult the [MQTT discovery documentation](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery) for Home Assistant's behavior. Configure broker settings according to its own documentation; there is no universal legacy `mqtt: broker:` YAML block to paste into modern Home Assistant.
 
@@ -195,6 +195,11 @@ Schedules use six periods in each of three day groups (`w`, `a`, `u`); group int
 
 Time strings must be valid `HH:MM`, entries must remain ordered, and temperatures must satisfy configured bounds/precision. The sixth/final period may use `00:00` to mean the end of the schedule day; it becomes active at midnight and carries into the next day until that day's first period. Other reversed periods are rejected before being applied.
 
+Schedules are available only after a valid report from the thermostat controller.
+Before that report, the schedule page shows a waiting message, the HTTP schedule
+endpoint returns 503, and schedule commands do not modify or publish invented
+programs. Existing controller programs are retained.
+
 Read-only HTTP endpoints include:
 
 ```text
@@ -225,7 +230,7 @@ The ESP8266 TCP dependency is the [labodj/ESPAsyncTCP maintenance fork](https://
 
 Digest and HTTP transport integration tests require the pinned ESPAsyncWebServer sources, installed by the commands below. They exercise its Digest verifier and actual send-buffer code, including bounded TCP space and retrying data sources.
 
-The validated development host is **Linux x86_64, Python 3.14** (CI uses 3.14.10), with g++/ASan/UBSan, Node.js for JavaScript checks, and PlatformIO **6.2.0**. Other hosts need a compatible toolchain override in `platformio_override.ini`. WAdapter is already included in the repository; no submodule initialization is required.
+The validated development host is **Linux x86_64, Python 3.14** (CI uses 3.14.10), with g++/ASan/UBSan and 32-bit multilib libraries, Node.js for JavaScript checks, and PlatformIO **6.2.0**. Other hosts need a compatible toolchain override in `platformio_override.ini`. WAdapter is already included in the repository; no submodule initialization is required.
 
 ```sh
 git clone https://github.com/labodj/WThermostatBeca-labo.git
@@ -235,6 +240,7 @@ python3.14 -m venv .venv
 python -m pip install -r requirements-dev.txt
 pio pkg install -e wthermostat
 python -m unittest discover -s tests -v
+CXX="g++ -m32" python -m unittest discover -s tests -v
 pio run -e wthermostat
 ```
 
@@ -267,7 +273,7 @@ python3.14 -m venv /tmp/wthermostat-ha-tests
 /tmp/wthermostat-ha-tests/bin/python tests/homeassistant_schema.py
 ```
 
-Native regressions cover UART command ordering, schedules, ECO/BAC state, configuration/identity migration, credentials, recovery, web responses and timezone transitions. The [GitHub Actions workflow](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml) runs tests, firmware builds, static analysis and official HA schema validation. Tagged builds prepare a draft release with checked normal/minimal images, gzip variants, normal symbols and source/build manifests. Debug images remain development artifacts.
+Native regressions cover UART command ordering, startup readiness, schedules, ECO/BAC state, configuration/identity migration, credentials, recovery, MQTT delivery, web responses and timezone transitions. Both 64-bit and 32-bit host runs are required; see the [test map and focused commands](tests/README.md). Tests are grouped by behavior, with shared compilation helpers outside test discovery. The [GitHub Actions workflow](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml) runs tests, firmware builds, static analysis and official HA schema validation. Tagged builds prepare a draft release with checked normal/minimal images, gzip variants, normal symbols and source/build manifests. Debug images remain development artifacts.
 
 ## Practical limits
 

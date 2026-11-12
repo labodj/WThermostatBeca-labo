@@ -1,8 +1,6 @@
 """Regressions for low-memory HTML and a concurrent live WebLog client."""
-
 import unittest
-
-import test_regressions as native
+import native_support as native
 from render_ui import render_pages
 
 
