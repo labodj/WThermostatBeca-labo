@@ -120,6 +120,7 @@ public:
 	}
 
     void setIdleCallback(std::function<void()> callback) { onIdle = std::move(callback); }
+    bool isReadingPacket() const { return readingPacket; }
 
 	WAdapterMqtt& setCallback(MQTT_CALLBACK_SIGNATURE) {
 		this->callback = std::move(callback);
@@ -157,6 +158,8 @@ public:
 			}
 			if (result == 1) {
 				nextMsgId = 1;
+                pendingSubackId = 0;
+                subackStatus = 0;
 				// Leave room in the buffer for header and variable length field
 				uint16_t length = MQTT_MAX_HEADER_SIZE;
 				unsigned int j;
@@ -416,6 +419,26 @@ public:
 		return false;
 	}
 
+    bool subscribeConfirmed(const char* topic) {
+        if (!subscribe(topic)) return false;
+        pendingSubackId = nextMsgId;
+        subackStatus = 0;
+        const unsigned long started = millis();
+        while (connected() && millis() - started < MQTT_SOCKET_TIMEOUT * 1000UL) {
+            if (!loop()) break;
+            if (subackStatus != 0) return subackStatus > 0;
+            yield();
+            if (onIdle) onIdle();
+        }
+        return false;
+    }
+
+    void abort() {
+        _state = MQTT_DISCONNECTED;
+        pendingSubackId = 0;
+        _client->stop();
+    }
+
 	bool unsubscribe(const char *topic) {
 		if (this->getMaxPacketSize() < 9 + strlen(topic)) {
 			// Too long
@@ -456,7 +479,9 @@ public:
 			}
 			if (_client->available()) {
 				uint8_t llen;
+				readingPacket = true;
 				uint16_t len = readPacket(&llen);
+                readingPacket = false;
 				uint16_t msgId = 0;
 				char* payload;
 				if (len > 0) {
@@ -500,6 +525,15 @@ public:
 								callback(topic, payload, length);
 							}
 						}
+                    } else if (type == MQTTSUBACK && pendingSubackId) {
+                        if (len != llen + 4) {
+                            abort();
+                            return false;
+                        }
+                        if (((buffer[llen + 1] << 8) | buffer[llen + 2]) == pendingSubackId) {
+                            subackStatus = buffer[llen + 3] <= 1 ? 1 : -1;
+                            pendingSubackId = 0;
+                        }
 					} else if (type == MQTTPINGREQ) {
 						buffer[0] = MQTTPINGRESP;
 						buffer[1] = 0;
@@ -545,6 +579,9 @@ public:
 private:
     std::function<void()> onIdle;
     unsigned long packetStarted = 0;
+    bool readingPacket = false;
+    uint16_t pendingSubackId = 0;
+    int8_t subackStatus = 0;
 	bool debug;
 	Client *_client;
 	int maxPacketSize;

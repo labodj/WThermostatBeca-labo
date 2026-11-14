@@ -143,7 +143,8 @@ struct Client{
     bool connected(){return live;}void setServer(const char*,int){}
     template<class...T>bool connect(T...){++connects;live=true;return true;}
     bool subscribe(const char*topic){subscriptions.emplace_back(topic);if(strstr(topic,"/cmnd/"))return commandsOk;return strcmp(topic,"homeassistant/status")||subscribeOk;}
-    void unsubscribe(const char*){}void disconnect(){live=false;}int state(){return 0;}
+    bool subscribeConfirmed(const char*topic){return subscribe(topic);}
+    void unsubscribe(const char*){}void disconnect(){live=false;}void abort(){live=false;}int state(){return 0;}
     bool publish(const char*,const char*,bool=false){return true;}
 };
 struct Probe{

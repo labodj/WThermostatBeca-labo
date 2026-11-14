@@ -487,6 +487,7 @@ public:
 	}
 
 	bool publishMqtt(const char* topic, const char * message, bool retained=false) {
+        if (mqttClient && mqttClient->isReadingPacket()) return false;
 		wlog->verbose(F("MQTT... '%s'"), topic);
 		wlog->verbose(F("MQTT  .. '%s'"), message);
 		if (isMqttConnected()) {
@@ -1506,10 +1507,6 @@ private:
 				wlog->notice(F("Connected to MQTT server."));
 				logHeap(PSTR("MQTT Connected"));
 
-				// send Online
-				mqttClient->publish(((String)getMqttTopic()+"/"+MQTT_TELE+"/LWT").c_str(), "Online", true);
-				logHeap(PSTR("MQTT publish"));
-
 				//Send device structure and status
 				mqttClient->subscribe("devices/#");
 				logHeap(PSTR("subscribed"));
@@ -1533,8 +1530,8 @@ private:
 				//Subscribe to device specific topic
 				String subscribeTopic=String(String(getMqttTopic()) + "/" + String(MQTT_CMND) + "/#");
 				wlog->notice(F("Subscribing to Topic %s"),subscribeTopic.c_str());
-				if (!mqttClient->subscribe(subscribeTopic.c_str())) {
-                    mqttClient->disconnect();
+				if (!mqttClient->subscribeConfirmed(subscribeTopic.c_str())) {
+                    mqttClient->abort();
                     return false;
                 }
 				logHeap(PSTR("topicSubscribe"));
@@ -1542,14 +1539,18 @@ private:
 
 #ifndef MINIMAL
                 if (isSupportingMqttHASS()) {
-                    if (!mqttClient->subscribe("homeassistant/status")) {
-                        mqttClient->disconnect();
+                    if (!mqttClient->subscribeConfirmed("homeassistant/status")) {
+                        mqttClient->abort();
                         return false;
                     }
                     requestHassDiscovery();
                 }
 #endif
-				return true;
+	            if (!mqttClient->publish(((String)getMqttTopic()+"/"+MQTT_TELE+"/LWT").c_str(), "Online", true)) {
+                mqttClient->abort();
+                return false;
+            }
+			return true;
 			} else {
 				wlog->notice(F("Connection to MQTT server failed, rc=%d"), mqttClient->state());
 				notify(false);
@@ -2350,8 +2351,8 @@ private:
 						String stat_topic = String(getMqttTopic()) + String("/") + String(MQTT_STAT) + String("/things/") + String(device->getId()) + String("/properties/") + String(property->getId());
 						//wlog->verbose(F("sending changed property '%s' with value '%s' for device '%s' to topic '%s'"),
 						//	property->getId(), property->toString().c_str(), device->getId(), stat_topic.c_str());
-						publishMqtt(stat_topic.c_str(), property->toString().c_str(), device->isMqttRetain());
-						property->setUnChanged();
+						if (publishMqtt(stat_topic.c_str(), property->toString().c_str(), device->isMqttRetain()))
+                            property->setUnChanged();
 
 						// only one per loop() -> bye
 						return;

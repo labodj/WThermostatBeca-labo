@@ -129,7 +129,7 @@ struct WDevice{unsigned long lastStateNotify=123;WProperty value{"v","V",BOOLEAN
  void toJsonValues(WJson*j,int){j->propertyBoolean("v",true);}bool isMqttRetain(){return true;}
  bool isVisible(int){return true;}bool isMqttSendChangedValues(){return true;}};
 struct Log{template<class...T>void notice(T...){}template<class...T>void verbose(T...){}template<class...T>void warning(T...){}};
-struct Mqtt{bool succeeds=false;unsigned calls=0;bool publish(const char*,const char*,bool){++calls;return succeeds;}int state(){return 0;}};
+struct Mqtt{bool succeeds=false;unsigned calls=0;bool isReadingPacket(){return false;}bool publish(const char*,const char*,bool){++calls;return succeeds;}int state(){return 0;}};
 struct Ip{String toString(){return "ip";}};
 struct Probe{Log logger;Log*wlog=&logger;Mqtt mqtt;Mqtt*mqttClient=&mqtt;String firmwareVersion="test";WStringStream stream{100};bool connected=true;
  bool isMqttConnected(){return connected;}void disconnectMqtt(){connected=false;}
@@ -166,3 +166,73 @@ struct Probe{Log logger;Log*wlog=&logger;unsigned sends=0;
  d.lastStateNotify=120000;testMillis=120001;p.tick(119999,&d);assert(p.sends==2);}
 '''
         self.compile_run(source, 'fresh_state_timer')
+
+    def test_single_property_failure_keeps_pending_update(self):
+        source = r'''
+        #include "Arduino.h"
+        #include "Stream.h"
+        #include "lib/WAdapter/WAdapter/WProperty.h"
+        const char* MQTT_STAT="stat";
+        struct WDevice{WDevice*next=nullptr;WProperty*firstProperty=nullptr;bool visible=true,single=true,retain=true;
+         bool isVisible(int){return visible;}bool isMqttSendChangedValues(){return single;}bool isMqttRetain(){return retain;}const char*getId(){return "thermostat";}};
+        struct Probe{WDevice*firstDevice=nullptr;bool connected=true,support=true;unsigned sends=0;bool succeed=false;
+         bool isMqttConnected(){return connected;}bool isSupportingMqttSingleValues(){return support;}
+         const char*getMqttTopic(){return "home/room";}
+         bool publishMqtt(const char*,const char*,bool){++sends;if(!succeed)connected=false;return succeed;}
+        '''+method(NETWORK,'handleDevicesChangedPropertiesMQTT')+r'''
+        };
+        int main(){Probe p;WDevice d;WProperty value("deviceOn","Power",BOOLEAN);value.setBoolean(true);value.setVisibility(MQTT);value.setChanged();d.firstProperty=&value;p.firstDevice=&d;
+         p.handleDevicesChangedPropertiesMQTT();printf("after_failed_send calls=%u changed=%d connected=%d\n",p.sends,value.isChanged(),p.connected);
+         assert(p.sends==1&&value.isChanged()&&!p.connected);
+         p.connected=true;p.succeed=true;p.handleDevicesChangedPropertiesMQTT();printf("after_reconnect calls=%u changed=%d\n",p.sends,value.isChanged());assert(p.sends==2&&!value.isChanged());
+        }
+        '''
+        self.compile_run(source, "single_property_retry")
+
+    def test_fragmented_command_survives_log_during_receive(self):
+        source = r'''
+#include "Arduino.h"
+#include "lib/WAdapter/WAdapter/WAdapterMqtt.h"
+struct Log{template<class...T>void verbose(T...){}template<class...T>void notice(T...){}template<class...T>void warning(T...){};};
+struct Probe{Log logger;Log*wlog=&logger;WAdapterMqtt*mqttClient;
+ bool isMqttConnected(){return mqttClient->connected();}
+ const char*getMqttServer(){return "broker";}
+ void disconnectMqtt(){mqttClient->disconnect();}
+''' + method(NETWORK, 'publishMqtt') + r'''
+};
+int main(){
+ Client client;client.data={0x20,2,0,0};WAdapterMqtt mqtt(false,client,512);assert(mqtt.connect("probe"));
+ Probe probe{{},nullptr,&mqtt};probe.wlog=&probe.logger;
+ const std::string topic="home/room/cmnd/things/thermostat/properties/deviceOn",body="true";
+ std::vector<uint8_t> packet={0x30,static_cast<uint8_t>(2+topic.size()+body.size()),0,static_cast<uint8_t>(topic.size())};
+ packet.insert(packet.end(),topic.begin(),topic.end());packet.insert(packet.end(),body.begin(),body.end());
+ client.data.insert(client.data.end(),packet.begin(),packet.begin()+15);
+ unsigned callbacks=0;std::string actualTopic,actualBody;
+ mqtt.setCallback([&](char*t,char*p,unsigned n){++callbacks;actualTopic=t;actualBody.assign(p,n);});
+ bool deferred=false;
+ mqtt.setIdleCallback([&](){assert(!deferred);deferred=true;
+  assert(!probe.publishMqtt("home/room/tele/log","MCU state"));
+  client.data.insert(client.data.end(),packet.begin()+15,packet.end());
+ });
+ assert(mqtt.loop()&&mqtt.connected()&&deferred&&callbacks==1);
+ assert(actualTopic==topic&&actualBody==body);
+}
+'''
+        self.compile_run(source, "mqtt_fragmented_log")
+
+    def test_suback_acceptance_and_refusal(self):
+        source = r'''
+#include "Arduino.h"
+#include "lib/WAdapter/WAdapter/WAdapterMqtt.h"
+int main(){
+ for(uint8_t result:{uint8_t(0),uint8_t(1),uint8_t(0x80)}){
+  Client client;client.data={0x20,2,0,0,0x90,3,0,2,0,0xb0,2,0,3,0x90,3,0,4,result};
+  WAdapterMqtt mqtt(false,client,512);assert(mqtt.connect("probe"));
+  assert(mqtt.subscribe("devices/#"));assert(mqtt.unsubscribe("devices/#"));
+  const bool accepted=mqtt.subscribeConfirmed("home/room/cmnd/#");
+  assert(accepted==(result!=0x80));
+  if(!accepted){mqtt.abort();assert(!mqtt.connected());}
+ }
+}
+'''
+        self.compile_run(source, "mqtt_suback")
