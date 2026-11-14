@@ -135,6 +135,17 @@ int main(){
   assert(dp.sys.equalsString("heat")&&dp.fan.equalsString("low")&&dp.targetTemperatureManualMode==21.5);
   for(bool received:dp.receivedStates)assert(!received);
  }
+ for(byte model:{byte(MODEL_BHT_002_GBLW),byte(MODEL_BAC_002_ALW)})for(unsigned raw=0;raw<256;++raw){
+  Probe p;p.model.setByte(model);p.commandLength=58;
+  p.receivedCommand[0]=0x55;p.receivedCommand[1]=0xaa;p.receivedCommand[2]=1;
+  p.receivedCommand[3]=7;p.receivedCommand[5]=58;p.receivedCommand[6]=model==MODEL_BAC_002_ALW?0x68:0x65;p.receivedCommand[9]=54;
+  for(unsigned i=0;i<54;i+=3){p.receivedCommand[i+11]=i/3%6+1;p.receivedCommand[i+12]=40;}
+  p.receivedCommand[12]=raw;p.processSerialCommand(1000);
+  const bool valid=raw>=(model==MODEL_BAC_002_ALW?20U:10U)&&raw<=70;
+  assert((p.schedulesDataPoint!=0)==valid);
+  assert(p.notifications==(valid?1U:0U));
+  if(valid)assert(p.schedules[2]==raw);else for(byte value:p.schedules)assert(value==0);
+ }
  puts("PASS all byte values for heartbeat, data points, system mode and fan mode preserve legacy behavior");
 }
 """

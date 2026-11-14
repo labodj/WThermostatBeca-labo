@@ -1654,6 +1654,7 @@ private:
     }
 
 	void logIncomingCommand(const char * message, int logLevel=LOG_LEVEL_TRACE){
+		if (!network->log()->isEnabled(logLevel)) return;
 		network->log()->printLevel(logLevel, F("MCU: %s;%s"), message,
 		this->getIncomingCommandAsString().c_str());
 	}
@@ -1835,9 +1836,18 @@ private:
 								//00 07 28 00 08 1E 1E 0B 1E 1E 0D 1E 00 11 2C 00 16 1E
 								//00 06 28 00 08 28 1E 0B 28 1E 0D 28 00 11 28 00 16 1E
 								//00 06 28 00 08 28 1E 0B 28 1E 0D 28 00 11 28 00 16 1E
+                                const double factor = getTemperatureFactor();
+                                const double minimum = (getThermostatModel() == MODEL_BAC_002_ALW ? 10.0 : 5.0) * factor;
+                                const double maximum = 35.0 * factor;
                                 bool valid = true;
-                                for (unsigned i = 0; i < 54; i += 3)
-                                    valid &= receivedCommand[i + 10] < 60 && receivedCommand[i + 11] < 24;
+                                for (unsigned i = 0; i < 54; i += 3) {
+                                    const byte temperature = receivedCommand[i + 12];
+                                    if (receivedCommand[i + 10] >= 60 || receivedCommand[i + 11] >= 24 ||
+                                        temperature < minimum || temperature > maximum) {
+                                        valid = false;
+                                        break;
+                                    }
+                                }
                                 if (!valid) break;
 								this->schedulesDataPoint = receivedCommand[6];
 								//this->thermostatModel->setByte(this->schedulesDataPoint == 0x65 ? MODEL_BHT_002_GBLW : MODEL_BAC_002_ALW);
