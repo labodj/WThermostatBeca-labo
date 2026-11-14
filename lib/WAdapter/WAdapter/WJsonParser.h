@@ -17,16 +17,19 @@ public:
     bool parse(const char* payload, TProcessKeyValueFunction callback,
                TValidateKeyValueFunction validator = nullptr) {
         device = nullptr;
+        expectedProperty = nullptr;
         process = std::move(callback);
         validate = std::move(validator);
         return run(payload);
     }
 
-    WProperty* parse(const char* payload, WDevice* target) {
+    WProperty* parse(const char* payload, WDevice* target, WProperty* expected = nullptr) {
         device = target;
+        expectedProperty = expected;
         process = nullptr;
         validate = nullptr;
         lastProperty = nullptr;
+        if (expected && expected->isReadOnly()) { valid = false; return nullptr; }
         return run(payload) ? lastProperty : nullptr;
     }
 
@@ -36,6 +39,7 @@ private:
     const char* cursor = nullptr;
     WDevice* device = nullptr;
     WProperty* lastProperty = nullptr;
+    WProperty* expectedProperty = nullptr;
     TProcessKeyValueFunction process;
     TValidateKeyValueFunction validate;
     bool valid = false;
@@ -152,6 +156,7 @@ private:
     }
 
     bool pass(const char* payload, bool apply) {
+        unsigned matched = 0;
         cursor = payload;
         whitespace();
         if (*cursor != '{') return false;
@@ -169,6 +174,7 @@ private:
                 if (!scalar(value, sizeof(value))) return false;
                 if (!isNull) {
                     if (device) {
+                        if (expectedProperty && (strcmp(key, expectedProperty->getId()) != 0 || ++matched > 1)) return false;
                         WProperty* property = device->getPropertyById(key);
                         if (property) {
                             if (!property->isValidValue(value)) return false;
@@ -188,7 +194,7 @@ private:
         if (*cursor != '}') return false;
         ++cursor;
         whitespace();
-        return *cursor == 0;
+        return *cursor == 0 && (!expectedProperty || matched == 1);
     }
 
     bool run(const char* payload) {

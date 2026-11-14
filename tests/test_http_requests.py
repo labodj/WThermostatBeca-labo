@@ -220,3 +220,45 @@ int main(){
  puts("PASS root dispatcher completes all tested methods and preserves POST/auth guards");}
 '''
         self.compile_run(source, 'http_dispatch')
+
+    def test_single_property_put_rejects_other_keys_before_applying(self):
+        source = r'''
+#include "Arduino.h"
+#include "Stream.h"
+#include "lib/WAdapter/WAdapter/WProperty.h"
+#include "lib/WAdapter/WAdapter/WJson.h"
+struct WDevice {
+ WProperty target{"targetTemperature","Target",DOUBLE}, power{"deviceOn","Power",BOOLEAN};
+ WDevice(){target.setDouble(18.5);power.setBoolean(true);}
+ WProperty*getPropertyById(const char*key){
+  if(!strcmp(key,"targetTemperature"))return &target;
+  if(!strcmp(key,"deviceOn"))return &power;
+  return nullptr;
+ }
+};
+#include "lib/WAdapter/WAdapter/WJsonParser.h"
+const char*APPLICATION_JSON="application/json";
+struct AsyncWebServerRequest{void*_tempObject=nullptr;int status=0;
+ void send(int code,const char* =nullptr,const char* =nullptr){status=code;}
+};
+struct Probe{
+ struct HttpBody{size_t capacity,received;char data[128];};
+ template<class F>void sendJson(AsyncWebServerRequest*r,F f){Print out;WJson json(&out);f(json);r->status=200;}
+''' + method(NETWORK, 'setPropertyValue') + r'''
+};
+void put(Probe&p,WDevice&d,const char*payload,WProperty*expected,int code){
+ AsyncWebServerRequest request;Probe::HttpBody body{};
+ strcpy(body.data,payload);body.capacity=body.received=strlen(payload);request._tempObject=&body;
+ p.setPropertyValue(&request,&d,expected);assert(request.status==code);
+}
+int main(){Probe p;WDevice d;
+ put(p,d,"{\"deviceOn\":false}",&d.target,400);
+ put(p,d,"{\"targetTemperature\":20,\"deviceOn\":false}",&d.target,400);
+ assert(d.power.getBoolean()&&d.target.getDouble()==18.5);
+ put(p,d,"{\"targetTemperature\":20}",&d.target,200);
+ assert(d.power.getBoolean()&&d.target.getDouble()==20);
+ put(p,d,"{\"deviceOn\":false}",nullptr,200);
+ assert(!d.power.getBoolean());
+}
+'''
+        self.compile_run(source, "http_single_property")

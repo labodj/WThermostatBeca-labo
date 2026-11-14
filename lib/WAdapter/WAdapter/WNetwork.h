@@ -1122,7 +1122,7 @@ public:
 								if (!isPut){
 									getPropertyValue(request, property);
 								} else {
-									setPropertyValue(request, device);
+									setPropertyValue(request, device, property);
 								}
 								return;
 							}
@@ -2387,11 +2387,11 @@ private:
 /* can be tested with:
    curl -H 'Content-Type: application/json' -X PUT -d '{"targetTemperature":24.5}' http://10.10.200.113/things/thermostat/properties/targetTemperature
  */
-    void setPropertyValue(AsyncWebServerRequest* request, WDevice* device) {
+    void setPropertyValue(AsyncWebServerRequest* request, WDevice* device, WProperty* expected = nullptr) {
         HttpBody* body = static_cast<HttpBody*>(request->_tempObject);
         if (!body || body->received != body->capacity) { request->send(400); return; }
         WJsonParser parser;
-        WProperty* property = parser.parse(body->data, device);
+        WProperty* property = parser.parse(body->data, device, expected);
         if (!parser.isValid()) { request->send(400, APPLICATION_JSON, "{\"error\":\"Invalid properties\"}"); return; }
         sendJson(request, [&](WJson& json) {
             json.beginObject();
