@@ -38,6 +38,12 @@ builders without contacting devices. For a focused run, use discovery with
 isolated environment and pinned requirements described in the project README.
 It validates emitted discovery against the official Home Assistant schemas.
 
+Clock tests compare the ESP calendar conversion with UTC at both ends of every
+representable day through February 2106. MCU tests check complete UTC and local
+serial frames across a Sunday/Monday year boundary, including schedule offsets.
+MQTT tests exercise buffer overflow, retry pacing across the millisecond counter
+rollover, and delivery to a second device while the first is waiting.
+
 The flash simulator interrupts sector erasure, payload writes and the final
 record header at each byte boundary. A second sequence carries the same flash
 contents through 3,653 attempted changes, with six interrupted saves before

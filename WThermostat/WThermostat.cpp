@@ -45,9 +45,13 @@ WClock *wClock;
 #endif
 
 void setup() {
+#ifdef MINIMAL
+    Serial.begin(SERIALSPEED, SERIAL_8N1, SERIAL_TX_ONLY);
+#else
     // Retain a full MCU burst while the network stack is busy.
     Serial.setRxBufferSize(1024);
     Serial.begin(SERIALSPEED);
+#endif
 
     // Wifi and Mqtt connection
     network = new WNetwork(SERIALDEBUG, APPLICATION, FULLVERSION, NO_LED, FLAG_OPTIONS_APPLICATION);

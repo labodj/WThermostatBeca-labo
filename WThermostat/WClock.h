@@ -54,11 +54,7 @@ typedef struct {
     uint8_t day_of_week = 0;  // sunday is day 1
     uint8_t day_of_month = 0;
     uint8_t month = 0;
-    char name_of_month[4]{};
-    uint16_t day_of_year = 0;
     uint16_t year = 0;
-    unsigned long days = 0;
-    unsigned long valid = 0;
 } TIME_T;
 
 typedef struct {
@@ -76,7 +72,6 @@ static constexpr uint32_t SECS_PER_MIN = 60;
 static constexpr uint32_t SECS_PER_HOUR = 3600;
 static constexpr uint32_t SECS_PER_DAY = 86400;
 static const uint8_t kDaysInMonth[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};  // API starts months from 1, this array starts from 0
-static const char kMonthNames[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
 const uint32_t START_VALID_TIME = 1451602800;  // Time is synced and after 2016-01-01
 
 const char* ID_CLOCK PROGMEM = "clock";
@@ -303,77 +298,59 @@ class WClock : public WDevice {
         return static_cast<unsigned long>(micros64() / 1000000ULL);
     }
 
-    byte getWeekDay() {
-        return RtcTime.day_of_week -1;
+    static void BreakTime(uint32_t epoch, TIME_T& tm) {
+        tm.second = epoch % SECS_PER_MIN;
+        const uint32_t minutes = epoch / SECS_PER_MIN;
+        tm.minute = minutes % 60;
+        const uint32_t hours = minutes / 60;
+        tm.hour = hours % 24;
+        uint32_t days = hours / 24;
+        tm.day_of_week = (days + 4) % 7 + 1;  // 1970-01-01 was Thursday, Sunday is 1.
+
+        tm.year = 1970;
+        for (;;) {
+            const unsigned daysInYear = LEAP_YEAR(tm.year) ? 366 : 365;
+            if (days < daysInYear) break;
+            days -= daysInYear;
+            ++tm.year;
+        }
+
+        tm.month = 1;
+        for (; tm.month < 12; ++tm.month) {
+            const unsigned daysInMonth = kDaysInMonth[tm.month - 1] +
+                                         (tm.month == 2 && LEAP_YEAR(tm.year));
+            if (days < daysInMonth) break;
+            days -= daysInMonth;
+        }
+        tm.day_of_month = days + 1;
     }
 
-    byte getWeekDay(unsigned long epochTime) {
-        //weekday from 0 to 6, 0 is Sunday
-        TIME_T tmpTime;
-        BreakTime(epochTime, tmpTime);
-        return tmpTime.day_of_week -1;
+    byte getWeekDay() {
+        return RtcTime.day_of_week -1;
     }
 
     byte getHours() {
         return RtcTime.hour;
     }
 
-    byte getHours(unsigned long epochTime) {
-        TIME_T tmpTime;
-        BreakTime(epochTime, tmpTime);
-        return tmpTime.hour;
-    }
-
     byte getMinutes() {
         return RtcTime.minute;
-    }
-
-    byte getMinutes(unsigned long epochTime) {
-        TIME_T tmpTime;
-        BreakTime(epochTime, tmpTime);
-        return tmpTime.minute;
     }
 
     byte getSeconds() {
         return RtcTime.second;
     }
 
-    byte getSeconds(unsigned long epochTime) {
-        TIME_T tmpTime;
-        BreakTime(epochTime, tmpTime);
-        return tmpTime.second;
-    }
-
     int getYear() {
         return RtcTime.year;
-    }
-
-    int getYear(unsigned long epochTime) {
-        TIME_T tmpTime;
-        BreakTime(epochTime, tmpTime);
-        return tmpTime.year;
     }
 
     byte getMonth() {
         return RtcTime.month;
     }
 
-    byte getMonth(unsigned long epochTime) {
-        TIME_T tmpTime;
-        BreakTime(epochTime, tmpTime);
-        //month from 1 to 12
-        return tmpTime.month;
-    }
-
     byte getDay() {
         return RtcTime.day_of_month;
-    }
-
-    byte getDay(unsigned long epochTime) {
-        TIME_T tmpTime;
-        BreakTime(epochTime, tmpTime);
-        //day from 1 to 31
-        return tmpTime.day_of_month;
     }
 
     bool isTimeLaterThan(byte hours, byte minutes) {
@@ -555,60 +532,7 @@ class WClock : public WDevice {
         return true;
     }
 
-    void BreakTime(uint32_t time_input, TIME_T& tm) {
-        // break the given time_input into time components
-        // this is a more compact version of the C library localtime function
-        uint8_t year;
-        uint8_t month;
-        uint8_t month_length;
-        uint32_t time;
-        uint32_t days;
-
-        time = time_input;
-        tm.second = time % 60;
-        time /= 60;  // now it is minutes
-        tm.minute = time % 60;
-        time /= 60;  // now it is hours
-        tm.hour = time % 24;
-        time /= 24;  // now it is days
-        tm.days = time;
-        tm.day_of_week = ((time + 4) % 7) + 1;  // Sunday is day 1
-
-        year = 0;
-        days = 0;
-        while (static_cast<unsigned>((days += (LEAP_YEAR(year+1970) ? 366 : 365)) <= time)) {
-            year++;
-        }
-        tm.year = year+1970;  // year is offset from 1970
-
-        days -= LEAP_YEAR(tm.year) ? 366 : 365;
-        time -= days;  // now it is days in this year, starting at 0
-        tm.day_of_year = time;
-
-        for (month = 0; month < 12; month++) {
-            if (1 == month) {  // february
-                if (LEAP_YEAR(tm.year)) {
-                    month_length = 29;
-                } else {
-                    month_length = 28;
-                }
-            } else {
-                month_length = kDaysInMonth[month];
-            }
-
-            if (time >= month_length) {
-                time -= month_length;
-            } else {
-                break;
-            }
-        }
-        strlcpy(tm.name_of_month, kMonthNames + (static_cast<size_t>(month) * 3), 4);
-        tm.month = month + 1;                        // jan is month 1
-        tm.day_of_month = time + 1;                  // day of month
-        tm.valid = (time_input > START_VALID_TIME);  // 2016-01-01
-    }
-
-        uint32_t MakeTime(TIME_T& tm) {
+    uint32_t MakeTime(TIME_T& tm) {
         // assemble time elements into time_t
 
         int i;

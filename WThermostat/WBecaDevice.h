@@ -791,6 +791,8 @@ public:
 		// to tasks only every second
 		if (now - lastLongLoop >= 1000){
 			updateCurrentSchedulePeriod();
+            if (!lastScheduleNotify && now >= MINIMUM_INTERVAL && network->isMqttConnected() &&
+                receivedSchedules() && sendSchedulesToMqtt()) lastScheduleNotify = now;
 			lastLongLoop=now;
 		}
 
@@ -808,8 +810,6 @@ public:
     		lastHeartBeat = now;
     	}
         if (network->isMqttConnected()) {
-            if (!lastScheduleNotify && receivedSchedules() && now >= MINIMUM_INTERVAL &&
-                sendSchedulesToMqtt()) lastScheduleNotify = now;
             const bool online = isDeviceStateComplete();
             if (lastMcuAvailability != static_cast<int>(online) &&
                 network->publishMqtt((String(network->getMqttTopic()) + "/tele/mcu").c_str(), online ? "Online" : "Offline", true))
@@ -941,44 +941,28 @@ public:
 	}
 
     void sendActualTimeToBeca(bool localtime) {
-        if (!wClock->isValidTime()) { sendActualTimeToBecaRequested(localtime); return; }
-    	//Command: Set date and time
-    	//                       OK YY MM DD HH MM SS Weekday
-    	//DEC:                   01 19 02 15 16 04 18 05
-    	//HEX: 55 AA 00 1C 00 08 01 13 02 0F 10 04 12 05
-    	//DEC:                   01 19 02 20 17 51 44 03
-    	//HEX: 55 AA 00 1C 00 08 01 13 02 14 11 33 2C 03
-    	unsigned long epochTime = (localtime ? wClock->getEpochTimeLocal() : wClock->getEpochTime());
-	epochTime = epochTime + (getSchedulesDayOffset() * 86400UL);
-    	byte year = wClock->getYear(epochTime) % 100;
-    	byte month = wClock->getMonth(epochTime);
-    	byte dayOfMonth = wClock->getDay(epochTime);
-    	byte hours = wClock->getHours(epochTime) ;
-    	byte minutes = wClock->getMinutes(epochTime);
-		// Tuya doc says: if localtime is requested: data[6] represents second, from 0 to 15. whaaa? divide by 4?
-		// My BAC-002 and BHT-002 have another behaviour:
-		// if secs is <30 it gets ceiled to 30
-		// everything >59 gets floored to 59
-		// so we set the clock after first ntp-sync to 0 seconds (gets rounded to 30), just to have a valid time immediately
-		// then we renew seconds=0 every 10 seconds
-		// finally we set at second 30 to real seconds (30, not 30/4)
-		// and all further timesettings are executed at second 30
-		// then we have a swiss clock in each room :)
-	byte secondsDivider = 1;
-        if (localtime) secondsDivider = SECONDS_DIVIDER;
-        byte secondsDivided = wClock->getSeconds(epochTime) / secondsDivider;
-    	byte dayOfWeek = getDayOfWeek();
+        if (!wClock->isValidTime()) {
+            sendActualTimeToBecaRequested(localtime);
+            return;
+        }
+        const unsigned long epoch = localtime ? wClock->getEpochTimeLocal() : wClock->getEpochTime();
+        const byte dayOffset = getSchedulesDayOffset();
+        TIME_T time;
+        wClock->BreakTime(epoch + dayOffset * SECS_PER_DAY, time);
+        const byte year = time.year % 100;
+        const byte weekday = time.day_of_week == 1 ? 7 : time.day_of_week - 1;
+        byte divider = 1;
+        if (localtime) divider = SECONDS_DIVIDER;
+        // Some MCUs round early seconds up to 30. Send zero until the scheduled sync at :30.
+        const byte seconds = timeIsRequestedSendZeroSecs ? 0 : time.second / divider;
 
-		if (timeIsRequestedSendZeroSecs) secondsDivided=0;
-
-		network->log()->trace(F("sendActual%sTimeToBeca %d + %d days: %02d.%02d.%02d %02d:%02d:%02d (/%d=%d) (dow: %d)" ),
-		(localtime ? "Local" : "GMT"), epochTime, getSchedulesDayOffset(), year, month, dayOfMonth, hours, minutes,
-			wClock->getSeconds(epochTime), secondsDivider, secondsDivided, dayOfWeek );
-	unsigned char sendTimeCommand[] = { 0x55, 0xaa, 0x00, static_cast<byte>(localtime ? 0x1c : 0x0c), 0x00, 0x08,
-    											0x01, year, month, dayOfMonth,
-    											hours, minutes, secondsDivided, dayOfWeek};
-    	commandCharsToSerial(14, sendTimeCommand);
-		lastTimeSent=millis();
+        network->log()->trace(F("sendActual%sTimeToBeca %lu + %d days: %02d.%02d.%02d %02d:%02d:%02d (/%d=%d) (dow: %d)"),
+            localtime ? "Local" : "GMT", epoch, dayOffset, year, time.month, time.day_of_month,
+            time.hour, time.minute, time.second, divider, seconds, weekday);
+        unsigned char command[] = {0x55, 0xaa, 0x00, static_cast<byte>(localtime ? 0x1c : 0x0c),
+            0x00, 0x08, 0x01, year, time.month, time.day_of_month, time.hour, time.minute, seconds, weekday};
+        commandCharsToSerial(sizeof(command), command);
+        lastTimeSent = millis();
     }
 
     void bindWebServerCalls(AsyncWebServer* webServer) override {
@@ -1599,20 +1583,6 @@ private:
     	return result;
     }
 
-    byte getDayOfWeek() {
-    	unsigned long epochTime = wClock->getEpochTimeLocal();
-	epochTime = epochTime + (getSchedulesDayOffset() * 86400UL);
-    	byte dayOfWeek = wClock->getWeekDay(epochTime);
-    	//make sunday a seven
-    	dayOfWeek = (dayOfWeek ==0 ? 7 : dayOfWeek);
-    	return dayOfWeek;
-    }
-
-    bool isWeekend() {
-    	byte dayOfWeek = getDayOfWeek();
-    	return ((dayOfWeek == 6) || (dayOfWeek == 7));
-    }
-
 	void logIncomingCommand(const char * message, int logLevel=LOG_LEVEL_TRACE){
 		if (!network->log()->isEnabled(logLevel)) return;
 		network->log()->printLevel(logLevel, F("MCU: %s;%s"), message,
@@ -1731,7 +1701,7 @@ private:
 								targetTemperatureManualMode = newValue;
 								if (changed) updateTargetTemperature();
 								receivedStates[1] = true;
-								logIncomingCommand(((String)"targetTemperature_x02:"+(String)targetTemperatureManualMode+"/"+(String)newValue).c_str(), (newChanged ? LOG_LEVEL_TRACE : LOG_LEVEL_VERBOSE));
+								logIncomingCommand("targetTemperature_x02", (newChanged ? LOG_LEVEL_TRACE : LOG_LEVEL_VERBOSE));
 								knownCommand = true;
 							}
 							break;

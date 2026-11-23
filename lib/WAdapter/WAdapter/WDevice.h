@@ -305,6 +305,12 @@ protected:
 	bool mqttRetain;
 	bool mqttSendChangedValues;
 
+#ifndef MINIMAL
+public:
+    bool stateRetryPending = false;
+    uint32_t lastStateFailure = 0;
+#endif
+
 private:
 	const char* id;
 	const char* name;

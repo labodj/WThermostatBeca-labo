@@ -382,6 +382,7 @@ public:
 			now = millis();
 #ifndef MINIMAL
 			if ((this->isMqttConnected()) && (this->isSupportingMqtt())
+                    && (!device->stateRetryPending || now - device->lastStateFailure >= 1000UL)
 					&& ((device->lastStateNotify == 0)
 							|| ((device->stateNotifyInterval > 0) &&
 								(now - device->lastStateNotify > device->stateNotifyInterval)))
@@ -1392,9 +1393,12 @@ private:
 				json.endObject();
 								
 				if (response->overflowed() || !publishMqtt(topic.c_str(), response->c_str(), device->isMqttRetain())) {
+                    device->lastStateFailure = millis();
+                    device->stateRetryPending = true;
 					device->lastStateNotify = 0;
 					return;
 				}
+                device->stateRetryPending = false;
 				device->lastStateNotify = millis();
 				// send single values
 				if (isSupportingMqttSingleValues() && device->isVisible(MQTT) and device->isMqttSendChangedValues()) {

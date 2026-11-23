@@ -40,6 +40,36 @@ void synchronize(time_t epoch, uint64_t ms) {
 class ClockTests(unittest.TestCase):
     compile_run = native.NativeTests.compile_run
 
+    def test_calendar_matches_utc_for_every_representable_day(self):
+        clock = ROOT / "WThermostat/WClock.h"
+        text = clock.read_text()
+        declarations = text[text.index("typedef struct {"):text.index("const char* ID_CLOCK")]
+        source = r'''
+#define _FILE_OFFSET_BITS 64
+#define _TIME_BITS 64
+#include <ctime>
+#include "Arduino.h"
+''' + declarations + method(clock, "BreakTime") + r'''
+void check(uint32_t epoch) {
+    time_t seconds = epoch;
+    struct tm reference;
+    assert(gmtime_r(&seconds, &reference));
+    TIME_T actual;
+    BreakTime(epoch, actual);
+    assert(actual.year == reference.tm_year + 1900 && actual.month == reference.tm_mon + 1);
+    assert(actual.day_of_month == reference.tm_mday && actual.day_of_week == reference.tm_wday + 1);
+    assert(actual.hour == reference.tm_hour && actual.minute == reference.tm_min && actual.second == reference.tm_sec);
+}
+int main() {
+    for (uint64_t start = 0; start <= UINT32_MAX; start += SECS_PER_DAY) {
+        check(start);
+        if (start + SECS_PER_DAY - 1 <= UINT32_MAX) check(start + SECS_PER_DAY - 1);
+    }
+    check(UINT32_MAX);
+}
+'''
+        self.compile_run(source, "full_utc_calendar")
+
     def test_clock_rules_timezones_and_sync_expiry(self):
         clock = ROOT / "WThermostat/WClock.h"
         text = clock.read_text()

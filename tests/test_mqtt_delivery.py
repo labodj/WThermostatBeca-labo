@@ -123,7 +123,7 @@ int main(){
 #include "lib/WAdapter/WAdapter/WProperty.h"
 #include "lib/WAdapter/WAdapter/WStringStream.h"
 const char*PROP_IDX="idx";
-struct WDevice{unsigned long lastStateNotify=123;WProperty value{"v","V",BOOLEAN};WProperty*firstProperty=&value;
+struct WDevice{unsigned long lastStateNotify=123;uint32_t lastStateFailure=0;bool stateRetryPending=false;WProperty value{"v","V",BOOLEAN};WProperty*firstProperty=&value;
  WDevice(){value.setBoolean(true);value.setUnChanged();}
  bool isDeviceStateComplete(){return true;}bool isMainDevice(){return false;}
  bool oversized=false;
@@ -139,12 +139,12 @@ struct Probe{Log logger;Log*wlog=&logger;Mqtt mqtt;Mqtt*mqttClient=&mqtt;String 
  WStringStream*getMQTTResponseStream(){stream.flush();return &stream;}
 ''' + method(NETWORK, 'publishMqtt') + method(NETWORK, 'mqttSendDeviceState') + r'''
 };int main(){testMillis=1000;Probe p;WDevice d;p.mqttSendDeviceState("state",&d);
- assert(p.mqtt.calls==1&&d.lastStateNotify==0&&!p.connected&&!d.value.isChanged());
+ assert(p.mqtt.calls==1&&d.lastStateNotify==0&&d.stateRetryPending&&d.lastStateFailure==1000&&!p.connected&&!d.value.isChanged());
  p.mqttSendDeviceState("state",&d);assert(p.mqtt.calls==1);
  p.connected=true;p.mqtt.succeeds=true;testMillis=2000;p.mqttSendDeviceState("state",&d);
- assert(p.mqtt.calls==2&&d.lastStateNotify==2000&&d.value.isChanged());
+ assert(p.mqtt.calls==2&&d.lastStateNotify==2000&&!d.stateRetryPending&&d.value.isChanged());
  d.oversized=true;p.mqttSendDeviceState("state",&d);
- assert(p.mqtt.calls==2&&d.lastStateNotify==0&&p.connected);
+ assert(p.mqtt.calls==2&&d.lastStateNotify==0&&d.stateRetryPending&&d.lastStateFailure==2000&&p.connected);
  d.oversized=false;p.mqttSendDeviceState("state",&d);assert(p.mqtt.calls==3&&d.lastStateNotify==2000);}
 '''
         self.compile_run(source, 'state_publish_retry')
@@ -157,7 +157,7 @@ struct Probe{Log logger;Log*wlog=&logger;Mqtt mqtt;Mqtt*mqttClient=&mqtt;String 
         source = r'''
 #include "Arduino.h"
 #include <cstdint>
-struct Device{uint32_t lastStateNotify=0,stateNotifyInterval=60000;bool isDeviceStateComplete(){return true;}void loop(unsigned long){}};
+struct Device{uint32_t lastStateNotify=0,stateNotifyInterval=60000,lastStateFailure=0;bool stateRetryPending=false;bool isDeviceStateComplete(){return true;}void loop(unsigned long){}};
 struct Log{template<class...T>void notice(T...){}};
 struct Probe{Log logger;Log*wlog=&logger;unsigned sends=0;
  bool isMqttConnected(){return true;}bool isSupportingMqtt(){return true;}
@@ -167,7 +167,14 @@ struct Probe{Log logger;Log*wlog=&logger;unsigned sends=0;
 }};int main(){Probe p;Device d;d.lastStateNotify=1001;testMillis=1001;p.tick(1000,&d);assert(!p.sends);
  d.lastStateNotify=0;p.tick(1000,&d);assert(p.sends==1);
  d.lastStateNotify=UINT32_MAX-1000;testMillis=120000;p.tick(119999,&d);assert(p.sends==2);
- d.lastStateNotify=120000;testMillis=120001;p.tick(119999,&d);assert(p.sends==2);}
+ d.lastStateNotify=120000;testMillis=120001;p.tick(119999,&d);assert(p.sends==2);
+ d.lastStateNotify=0; d.stateRetryPending=true; d.lastStateFailure=UINT32_MAX-499;
+ for(unsigned elapsed=0;elapsed<1000;++elapsed){
+     testMillis=uint32_t(d.lastStateFailure+elapsed);p.tick(testMillis,&d);
+ }
+ assert(p.sends==2);
+ Device healthy;p.tick(testMillis,&healthy);assert(p.sends==3);
+ testMillis=500;p.tick(testMillis,&d);assert(p.sends==4);}
 '''
         self.compile_run(source, 'fresh_state_timer')
 

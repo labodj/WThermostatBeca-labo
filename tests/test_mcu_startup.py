@@ -59,6 +59,43 @@ int main(){Probe p;Request unavailable;p.sendSchedules(&unavailable);
 '''
         self.compile_run(source, 'schedule_readiness')
 
+    def test_schedule_failure_retries_once_per_second_and_recovers(self):
+        loop = method(BECA, 'loop')
+        # Exercise the actual periodic block, including the placement of the publish attempt.
+        periodic = loop[loop.index('if (now - lastLongLoop'):loop.index('//Heartbeat')]
+        source = r'''
+#include "Arduino.h"
+constexpr unsigned MINIMUM_INTERVAL = 2000;
+struct Probe {
+    Probe* network = this;
+    uint32_t lastLongLoop = 0, lastScheduleNotify = 0;
+    unsigned attempts = 0, updates = 0;
+    bool connected = true, ready = false, succeeds = false;
+    bool isMqttConnected() { return connected; }
+    bool receivedSchedules() { return ready; }
+    bool sendSchedulesToMqtt() { ++attempts; return succeeds; }
+    void updateCurrentSchedulePeriod() { ++updates; }
+    void tick(uint32_t now) {
+''' + periodic + r'''
+    }
+};
+int main() {
+    Probe p;
+    for (unsigned now = 0; now < 3000; ++now) p.tick(now);
+    assert(p.updates == 2 && !p.attempts);
+    p.ready = true;
+    for (unsigned now = 3000; now < 6000; ++now) p.tick(now);
+    assert(p.attempts == 3 && !p.lastScheduleNotify);
+    p.connected = false;
+    p.tick(6000);
+    assert(p.attempts == 3);
+    p.connected = p.succeeds = true;
+    p.tick(7000); p.tick(8000);
+    assert(p.attempts == 4 && p.lastScheduleNotify == 7000);
+}
+'''
+        self.compile_run(source, 'schedule_retry_rate')
+
     def test_schedule_page_does_not_offer_empty_programs_before_first_report(self):
         from render_ui import render_pages
         pages = render_pages(schedules_ready=False)

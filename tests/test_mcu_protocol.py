@@ -9,15 +9,18 @@ class McuProtocolTests(unittest.TestCase):
     compile_run = native.NativeTests.compile_run
 
     def test_mcu_handshake_readiness_and_numeric_protocol(self):
-        source = r"""
-#include "properties.h"
+        clock = ROOT / "WThermostat/WClock.h"
+        clock_header = clock.read_text()
+        calendar = clock_header[clock_header.index("typedef struct {"):clock_header.index("const char* ID_CLOCK")]
+        source = '#include "properties.h"\n' + calendar + r"""
 #define STATE_COMPLETE 6
 #define SECONDS_DIVIDER 1
 struct Clock {
     bool valid=false;bool isValidTime(){return valid;}
-    unsigned long getEpochTime(){return 1704067200;}unsigned long getEpochTimeLocal(){return getEpochTime();}
-    byte getYear(unsigned long){return 24;}byte getMonth(unsigned long){return 1;}byte getDay(unsigned long){return 1;}
-    byte getHours(unsigned long){return 12;}byte getMinutes(unsigned long){return 10;}byte getSeconds(unsigned long){return 30;}
+    // 2023-12-31 23:30:30 UTC, already Monday in UTC+1.
+    unsigned long getEpochTime(){return 1704065430UL;}
+    unsigned long getEpochTimeLocal(){return getEpochTime()+3600;}
+""" + method(clock, "BreakTime") + r"""
 };
 struct Log{template<class...T>void notice(T...){}template<class...T>void warning(T...){}template<class...T>void trace(T...){}bool isEnabled(int){return false;}};
 struct Net{Log value;Log*log(){return &value;}bool isDebug(){return false;}};
@@ -30,7 +33,7 @@ struct Probe{
     unsigned mcuRetryCount=0;
     bool timeIsRequested=false,timeIsRequestedLocaltime=false,timeIsRequestedSendZeroSecs=false;
     unsigned char receivedCommand[1024];double targetTemperatureManualMode=35;float factor=10;
-    float getTemperatureFactor(){return factor;}byte getSchedulesDayOffset(){return 0;}byte getDayOfWeek(){return 1;}
+    float getTemperatureFactor(){return factor;}byte dayOffset=0;byte getSchedulesDayOffset(){return dayOffset;}
     void updateTargetTemperature(){}void updateModeAndAction(){}
 """
         for name in ["getCommandAsString", "commandCharsToSerial", "queryAllDPs", "startMcuInitialize",
@@ -57,10 +60,22 @@ int main(){
     assert(Serial.output[10]==0&&Serial.output[11]==0&&Serial.output[12]==1&&Serial.output[13]==94);
     byte checksum=0;for(unsigned i=0;i<14;++i)checksum+=Serial.output[i];assert(checksum==Serial.output[14]);
     Serial.output.clear();p.sendActualTimeToBeca(true);assert(Serial.output.empty()&&p.timeIsRequested);
-    p.clock.valid=true;p.sendActualTimeToBeca(true);assert(Serial.output.size()==15&&Serial.output[3]==0x1c&&Serial.output[6]==1&&Serial.output[7]==24);
-    assert(Serial.output[12]==30/SECONDS_DIVIDER);
-    Serial.output.clear();p.sendActualTimeToBeca(false);assert(Serial.output[3]==0x0c&&Serial.output[12]==30);
-    p.timeIsRequestedSendZeroSecs=true;Serial.output.clear();p.sendActualTimeToBeca(true);assert(Serial.output[12]==0);
+    p.clock.valid=true;
+    auto expectTime=[&](bool local,byte year,byte month,byte day,byte hour,byte seconds,byte weekday){
+        Serial.output.clear();p.sendActualTimeToBeca(local);
+        const byte expected[]={0x55,0xaa,0,static_cast<byte>(local?0x1c:0x0c),0,8,1,year,month,day,hour,30,seconds,weekday};
+        assert(Serial.output.size()==sizeof(expected)+1);
+        byte crc=0;
+        for(size_t i=0;i<sizeof(expected);++i){assert(Serial.output[i]==expected[i]);crc+=expected[i];}
+        assert(Serial.output.back()==crc);
+    };
+    expectTime(true,24,1,1,0,30/SECONDS_DIVIDER,1);
+    expectTime(false,23,12,31,23,30,7);
+    p.dayOffset=1;
+    expectTime(false,24,1,1,23,30,1);
+    expectTime(true,24,1,2,0,30/SECONDS_DIVIDER,2);
+    p.timeIsRequestedSendZeroSecs=true;
+    expectTime(true,24,1,2,0,0,2);
     puts("PASS MCU retry/readiness, full-width signed values, setpoint encoding, checksum and deferred time");
 }
 """
