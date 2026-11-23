@@ -752,7 +752,7 @@ private:
         const size_t length = strlen(string);
         buf[pos++] = length >> 8;
         buf[pos++] = length & 0xff;
-        memmove(buf + pos, string, length);
+        memmove(buf + pos, string, length); // NOLINT(bugprone-not-null-terminated-result): MQTT strings use a length prefix.
         return pos + length;
 	}
 
