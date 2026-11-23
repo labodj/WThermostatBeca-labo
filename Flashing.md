@@ -2,20 +2,21 @@
 
 ## Notice
 
-Modifying and flashing of devices is at your own risk. I'm not responsible for bricked or damaged devices. I strongly recommend a backup of original firmware before installing any other software.  
-The thermostat is working independent from the WiFi-Module. That means, functionality of the thermostat itself will not and can't be changed. This firmware replaces only the communication part of the thermostat, which is handled by the ESP module. The firmware will partially work with other devices too. The Tuya devices has a serial communication standard (MCU commands) which is only different in parameters. Unknown commands will be forwarded to the MQTT server.
+Back up the original firmware before replacing it. Flashing changes the software on the ESP8266 Wi-Fi module. A separate controller runs the thermostat and communicates with the ESP8266 over a serial connection. The supported settings and commands depend on the controller model.
 
 ## Choose your way
 
-There are 2 options to flash the firmware on device:
+If the device already runs WThermostat-Labo, open **Update firmware** in its web interface and upload the normal image. After the restart, open **Info** to verify the version and MCU initialization, then check the setpoint and schedules. Keep power connected through the restart. The bootloader needs power while installing the new image.
 
-1. Use tuya-convert for flashing. Tested multiple times with success on all devices!
+For a first installation, choose the method that matches the installed firmware and module.
+
+1. For compatible legacy Tuya firmware, see the compatibility note in Option 1.
 2. Flashing device manually: Unplug and open the device, wire 4 cables and connect it to a programmer for ESP8266
 3. Uploading WThermostat if you already have installed tasmota or another Free Firmware
 
 ## Download pre-built binaries
 
-Pre-Built binaries can be downloaded at [releases-page](https://github.com/fashberg/WThermostatBeca/releases).
+Use the normal and minimal images from the same release of this fork. [WThermostat-Labo releases](https://github.com/labodj/WThermostatBeca-labo/releases).
 
 ## Option 1: Use tuya-convert
 

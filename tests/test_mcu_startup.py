@@ -38,10 +38,10 @@ const char* APPLICATION_JSON="application/json",*MQTT_STAT="stat";
 const String SCHEDULES="schedules";const char SCHEDULES_DAYS[]="wau",SCHEDULES_PERIODS[]="123456";
 struct Request{int status=0;String body;void send(int code,const char*,const char*value){status=code;body=value;}};
 using AsyncWebServerRequest=Request;
-struct Net{unsigned publishes=0;WStringStream stream{3096};
- WStringStream*getMQTTResponseStream(){stream.flush();return &stream;}
+struct Net{unsigned publishes=0;WStringStream stream{3096},small{8};bool lowMemory=false;
+ WStringStream*getMQTTResponseStream(){auto& s=lowMemory?small:stream;s.flush();return &s;}
  const char*getMqttTopic(){return "room";}
- void publishMqtt(const char*,WStringStream*){++publishes;}
+ bool publishMqtt(const char*,WStringStream*){return ++publishes > 1;}
 };
 struct Probe{Net net;Net*network=&net;bool ready=false;byte schedules[54]{};
  bool receivedSchedules(){return ready;}double getTemperatureFactor(){return 2;}
@@ -53,7 +53,9 @@ int main(){Probe p;Request unavailable;p.sendSchedules(&unavailable);
  p.sendSchedulesToMqtt();assert(p.net.publishes==0);
  p.ready=true;Request available;p.sendSchedules(&available);assert(available.status==200);
  assert(available.body.indexOf("w1h")>=0&&available.body.indexOf("u6t")>=0);
- p.sendSchedulesToMqtt();assert(p.net.publishes==1);}
+ p.net.lowMemory=true;Request small;p.sendSchedules(&small);assert(small.status==503&&small.body.indexOf("error")>=0);
+ p.net.lowMemory=false;
+ assert(!p.sendSchedulesToMqtt());assert(p.sendSchedulesToMqtt());assert(p.net.publishes==2);}
 '''
         self.compile_run(source, 'schedule_readiness')
 

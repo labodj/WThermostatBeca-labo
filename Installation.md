@@ -2,7 +2,7 @@
 
 Here is a quick overview of installing the Beca/Moes thermostat hardware.
 
-For Software installation see [Flasing.md](Flasing.md) and [Configuration.md](Configuration.md).
+For firmware installation, see the [flashing guide](Flashing.md) and the [configuration guide](Configuration.md).
 
 ## ATTENTION
 

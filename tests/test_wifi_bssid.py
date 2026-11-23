@@ -268,22 +268,22 @@ const ip4_addr_t*netif_ip4_addr(netif*p){return &p->ip;}const ip4_addr_t*netif_i
 int etharp_find_addr(netif*,const ip4_addr_t*,eth_addr**,const ip4_addr_t**){return cachedGateway?0:-1;}
 void etharp_request(netif*,const ip4_addr_t*){++arpRequests;}
 enum class DNSReplyCode{NoError};
-struct DNSServer{void setErrorReplyCode(DNSReplyCode){}void start(int,const char*,IPAddress){}};
+struct DNSServer{void setErrorReplyCode(DNSReplyCode){}bool start(int,const char*,IPAddress){return true;}};
 struct Log{template<class...T>void warning(T...){}template<class...T>void notice(T...){}template<class...T>void trace(T...){}};
 '''+constants+r'''
 struct Probe{
  Log logger;Log*wlog=&logger;bool bssidLocked=true,fallback=false,updating=false,settingsFound=true,staticIp=false;
  wnWifiMode wifiModeRunning=WIFIMODE_STATION,wifiModeDesired=WIFIMODE_STATION;
- unsigned long wifiOfflineSince=0,apStartedAt=0,lastWifiConnect=0,lastMqttConnect=0;int connectFailCounter=0;
+ unsigned long wifiOfflineSince=0,apStartedAt=0,lastWifiConnect=0,mqttRetryInterval=0;int connectFailCounter=0;
  unsigned long gatewayLastCheck=0,gatewayLastSeen=0,recoveryApStartedAt=0,localRecoveryStartedAt=0;
- bool recoveryApActive=false,localRecoveryActive=false;
+ bool recoveryApActive=false,localRecoveryActive=false,configApRetryPending=false;
  DNSServer*dnsApServer=nullptr;uint8_t bssid[6]={2,0x11,0x22,0x33,0x44,0x55};
  ~Probe(){deleteDnsApServer();}void deleteDnsApServer(){delete dnsApServer;dnsApServer=nullptr;}
  bool isSupportingApFallback(){return fallback;}bool isUpdateRunning(){return updating;}bool isStaticIpEnabled(){return staticIp;}const char*getStaticIp(){return "192.168.4.20";}const char*getSubnetMask(){return "255.255.0.0";}
  void disconnectMqtt(){}void logHeap(const char*){}String getClientName(bool){return "fixture";}
  const char*getSsid(){return "fixture-ssid";}const char*getPassword(){return "fixture-password";}
 '''
-        for name in ['updateWifiRecovery', 'gatewayReachable', 'startRecoveryAp', 'stopRecoveryAp', 'startLocalRecovery', 'getBssid', 'parseBssid', 'connectWifi']:
+        for name in ['updateWifiRecovery', 'gatewayReachable', 'startApDns', 'startRecoveryAp', 'stopRecoveryAp', 'startLocalRecovery', 'getBssid', 'parseBssid', 'connectWifi']:
             source += method(NETWORK, name) + '\n'
         source += 'void transition(unsigned long now){' + transition + '}\n};\n'
         source += r'''
@@ -293,6 +293,7 @@ int main(){
     p.updating=true;p.updateWifiRecovery(125000);assert(!p.recoveryApActive);
     p.updating=false;p.updateWifiRecovery(125000);
     assert(p.recoveryApActive&&p.wifiModeDesired==WIFIMODE_STATION&&WiFi.modeValue==WIFI_AP_STA&&WiFi.disconnects==0&&p.dnsApServer);
+    auto* originalDns=p.dnsApServer;p.startApDns();assert(p.dnsApServer==originalDns);
     for(int i=0;i<5;++i){p.connectWifi();assert(WiFi.selectedLock&&!memcmp(WiFi.selected,p.bssid,6));}
     const unsigned long end=125000+maxApRunTimeMinutes*60000UL;
     p.updating=true;p.updateWifiRecovery(end+1);assert(p.recoveryApActive);
@@ -327,7 +328,14 @@ int main(){
      local.updateWifiRecovery(300099);assert(local.localRecoveryActive);
      local.updateWifiRecovery(300100);assert(!local.localRecoveryActive&&local.wifiModeDesired==WIFIMODE_STATION);}
     {Probe collision;collision.staticIp=true;WiFi.ip=IPAddress(0U);collision.startRecoveryAp(0);assert(WiFi.apIp==IPAddress(172,31,255,1));}
-    {Probe failed;WiFi.apOk=false;failed.startRecoveryAp(0);assert(!failed.recoveryApActive&&!failed.dnsApServer);WiFi.apOk=true;}
+    {Probe failed;WiFi.apOk=false;unsigned attempts=WiFi.aps;
+     failed.updateWifiRecovery(120000);assert(WiFi.aps==attempts+1&&!failed.dnsApServer);
+     failed.updateWifiRecovery(239999);assert(WiFi.aps==attempts+1);
+     WiFi.apOk=true;failed.updateWifiRecovery(240000);assert(failed.recoveryApActive);}
+    {Probe boot;boot.wifiModeDesired=WIFIMODE_AP;WiFi.apOk=false;unsigned attempts=WiFi.aps;
+     boot.transition(5);assert(boot.configApRetryPending&&!boot.dnsApServer);
+     boot.transition(20004);assert(WiFi.aps==attempts+1);
+     WiFi.apOk=true;boot.transition(20005);assert(boot.dnsApServer&&!boot.configApRetryPending);}
     puts("PASS fault-only AP+STA, gateway ARP, offline timeout, physical recovery expiry, BSSID retries, OTA deferral and clock wrap");
 }
 '''

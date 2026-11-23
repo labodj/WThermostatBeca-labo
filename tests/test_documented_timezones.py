@@ -13,8 +13,8 @@ class DocumentedTimezoneTests(unittest.TestCase):
     def test_examples_match_regional_offsets_and_transitions(self):
         clock = ROOT / 'WThermostat/WClock.h'
         text = clock.read_text()
-        source = '#include "properties.h"\n#define SECS_PER_DAY 86400UL\n#define SECS_PER_HOUR 3600UL\n#define SECS_PER_MIN 60UL\n'
-        source += text[text.index('typedef struct {'):text.index('WiFiUDP ntpUDP')]
+        source = '#include "properties.h"\n'
+        source += text[text.index('typedef struct {'):text.index('const char* ID_CLOCK')]
         source += '\nstruct Probe{\n'
         for name in ['resetTimeRule', 'parseTimeRule', 'parseTimeZone', 'parseTimeZoneComponents', 'BreakTime', 'MakeTime', 'RuleToTime']:
             source += method(clock, name) + '\n'

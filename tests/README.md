@@ -22,7 +22,7 @@ replaces a build with the ESP8266 toolchain. CI runs both commands.
 | MCU startup, UART and control | `test_mcu_*`, `test_temperature_commands.py`, `test_resync.py` |
 | Clock and schedules | `test_clock.py`, `test_documented_timezones.py`, `test_schedules.py` |
 | Properties, parsing and serialization | `test_properties.py`, `test_parsers.py`, `test_json_output.py`, `test_runtime_contracts.py` |
-| Storage and migration | `test_settings_failures.py`, `test_storage_layout.py`, `test_network_strings.py` |
+| Storage, power loss and migration | `test_resilience.py`, `test_settings_failures.py`, `test_storage_layout.py`, `test_network_strings.py` |
 | Wi-Fi and recovery | `test_wifi_bssid.py`, `test_bssid_runtime.py`, `test_network_recovery.py` |
 | MQTT and discovery | `test_mqtt_delivery.py`, `test_homeassistant.py` |
 | HTTP, authentication and UI | `test_http_requests.py`, `test_digest_auth.py`, `test_optional_auth.py`, `test_web*`, `test_page_response.py`, `test_html_reserve.py` |
@@ -37,6 +37,12 @@ builders without contacting devices. For a focused run, use discovery with
 `homeassistant_schema.py` is a separate integration suite. Run it with the
 isolated environment and pinned requirements described in the project README.
 It validates emitted discovery against the official Home Assistant schemas.
+
+The flash simulator interrupts sector erasure, payload writes and the final
+record header at each byte boundary. A second sequence carries the same flash
+contents through 3,653 attempted changes, with six interrupted saves before
+each successful one. Each reboot must recover a complete image. Reading it or
+saving the same values again must leave the erase count unchanged.
 
 Two old cases were removed because stronger retained cases cover their complete
 assertions: legacy discovery IDs are checked in the discovery payload contract;

@@ -138,7 +138,7 @@ struct Clock{
     Net*network;Value server{"pool.ntp.org"},zone{"99"},dst{"0,3,0,2,120"},standard{"0,10,0,3,60"};
     Value*ntpServer=&server,*timeZoneConfig=&zone,*timeDST=&dst,*timeSTD=&standard;
     Value formatted{"2026-10-27 12:34:56"},offsetValue;Value*epochTimeLocalFormatted=&formatted,*offset=&offsetValue;
-    unsigned long lastTry=0,lastNtpSync=0;int lastDiff=0;bool isValidTime(){return true;}
+    bool ntpRunning=true;uint64_t lastSyncUs=0;uint32_t ntpTime=0;int lastDiff=0;bool isValidTime(){return true;}
     Clock(Net*n):network(n){}const char*getId(){return "clock";}
 '''+method(clock, "printConfigPage")+method(clock, "printInfoPage")+"\n};\n"
     source += r'''

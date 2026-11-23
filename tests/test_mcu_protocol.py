@@ -26,6 +26,7 @@ struct Probe{
     Net net;Net*network=&net;Clock clock;Clock*wClock=&clock;
     bool mcuInitialized=false,receivingDataFromMcu=false,receivedStates[STATE_COMPLETE]{};
     int mcuInitializeState=0;unsigned long lastMcuAttempt=0,lastMcuReceived=0,lastTimeSent=0;
+    byte schedulesDataPoint=0x65;int currentSchedulePeriod=18;unsigned long lastScheduleNotify=1;
     unsigned mcuRetryCount=0;
     bool timeIsRequested=false,timeIsRequestedLocaltime=false,timeIsRequestedSendZeroSecs=false;
     unsigned char receivedCommand[1024];double targetTemperatureManualMode=35;float factor=10;
@@ -39,7 +40,9 @@ struct Probe{
         source += r"""
 };
 int main(){
-    Probe p;testMillis=1;p.startMcuInitialize();p.mcuInitialize();
+    Probe p;testMillis=1;p.startMcuInitialize();
+    assert(!p.schedulesDataPoint && p.currentSchedulePeriod==-1 && !p.lastScheduleNotify);
+    p.mcuInitialize();
     assert(p.mcuInitializeState==2&&Serial.output.size()==7);
     testMillis=2000;p.mcuInitialize();assert(Serial.output.size()==7);
     testMillis=4001;p.mcuInitialize();assert(Serial.output.size()==14);

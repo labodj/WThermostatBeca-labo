@@ -1,6 +1,7 @@
 #ifndef BECAMCU_H
 #define	BECAMCU_H 
 
+#include <initializer_list>
 #include <utility>
 #include "Arduino.h"
 #include <ESP8266WiFi.h>
@@ -785,6 +786,7 @@ public:
     		}
     	}
         serviceSerial(now);
+        if (mcuInitialized && now - lastMcuReceived > 60000UL) startMcuInitialize();
 
 		// to tasks only every second
 		if (now - lastLongLoop >= 1000){
@@ -805,20 +807,17 @@ public:
     		//commandHexStrToSerial("55 aa 00 00 00 00");
     		lastHeartBeat = now;
     	}
-    	if (receivedSchedules()) {
-    		//Notify schedules
-    		if ((lastScheduleNotify == 0) && (now - lastScheduleNotify > MINIMUM_INTERVAL)) {
-    			sendSchedulesToMqtt();
-    			lastScheduleNotify = now;
-    		}
-    	}
         if (network->isMqttConnected()) {
+            if (!lastScheduleNotify && receivedSchedules() && now >= MINIMUM_INTERVAL &&
+                sendSchedulesToMqtt()) lastScheduleNotify = now;
             const bool online = isDeviceStateComplete();
             if (lastMcuAvailability != static_cast<int>(online) &&
                 network->publishMqtt((String(network->getMqttTopic()) + "/tele/mcu").c_str(), online ? "Online" : "Offline", true))
                 lastMcuAvailability = online;
-        } else lastMcuAvailability = -1;
-        if (mcuInitialized && now - lastMcuReceived > 60000UL) startMcuInitialize();
+        } else {
+            lastMcuAvailability = -1;
+            lastScheduleNotify = 0;
+        }
 		if (!isMcuInitialized()) mcuInitialize();
 		
 		if (timeIsRequested && isMcuInitialized() &&  wClock->isValidTime()){
@@ -1047,8 +1046,8 @@ public:
 		}
     }
 
-	void sendSchedulesToMqtt(){
-        if (!receivedSchedules()) return;
+	bool sendSchedulesToMqtt(){
+        if (!receivedSchedules()) return false;
 		WStringStream* response = network->getMQTTResponseStream();
 		WJson json(response);
 		json.beginObject();
@@ -1057,7 +1056,7 @@ public:
 		this->toJsonSchedules(&json, 2);// SCHEDULE_SUNDAY);
 		json.endObject();
 		String stat_topic = network->getMqttTopic() + (String)"/" + String(MQTT_STAT) + (String)"/things/" + String(getId()) + (String)"/";
-		network->publishMqtt((stat_topic+SCHEDULES).c_str(), response);
+		return network->publishMqtt((stat_topic+SCHEDULES).c_str(), response);
 	}
 
 
@@ -1166,7 +1165,11 @@ public:
     	this->toJsonSchedules(&json, 1);// SCHEDULE_SATURDAY);
     	this->toJsonSchedules(&json, 2);// SCHEDULE_SUNDAY);
     	json.endObject();
-		request->send(200, APPLICATION_JSON, response->c_str());
+		if (response->overflowed()) {
+            request->send(503, APPLICATION_JSON, "{\"error\":\"Schedule response unavailable\"}");
+            return;
+        }
+        request->send(200, APPLICATION_JSON, response->c_str());
     }
 
     virtual void toJsonSchedules(WJson* json, byte schedulesDay) {
@@ -1324,6 +1327,10 @@ public:
 
 
 	void startMcuInitialize(){
+        // Partial edits must use a schedule received from this MCU session.
+        schedulesDataPoint = 0;
+        currentSchedulePeriod = -1;
+        lastScheduleNotify = 0;
         for (unsigned i = 0; i < STATE_COMPLETE; ++i) receivedStates[i] = false;
         lastMcuAttempt = 0;
         mcuRetryCount = 0;
@@ -1414,27 +1421,36 @@ public:
     	return schedulesDayOffset->getByte();
     }
 
-    String escapedForDiscovery(const char* value) {
-        WStringStream escaped(strlen(value) * 6);
-        WJson json(&escaped);
-        json.streamPrintQuoted(&escaped, value);
-        return String(escaped.c_str());
+    // Discovery templates contain only %s fields. Escape directly into the final
+    // packet so a reconnect does not require a second payload-sized allocation.
+    bool writeDiscoveryTemplate(WStringStream& output, PGM_P format,
+                                std::initializer_list<const char*> values) {
+        WJson json(&output);
+        auto value = values.begin();
+        while (const char c = pgm_read_byte(format++)) {
+            if (c != '%') {
+                if (!output.write(static_cast<uint8_t>(c))) return false;
+                continue;
+            }
+            if (pgm_read_byte(format++) != 's' || value == values.end() || !*value) return false;
+            json.streamPrintQuoted(&output, *value++);
+            if (output.overflowed()) return false;
+        }
+        return value == values.end() && !output.overflowed();
     }
 
     String discoveryId(const char* suffix) {
-        String id = network->getIdx();
-        bool valid = id.length() > 0;
-        for (unsigned int i = 0; i < id.length(); ++i) {
-            const char c = id.charAt(i);
-            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                  (c >= '0' && c <= '9') || c == '_' || c == '-')) valid = false;
+        const char* configured = network->getIdx();
+        bool valid = configured && *configured;
+        for (const char* p = configured; valid && *p; ++p) {
+            const char c = *p;
+            valid = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                    (c >= '0' && c <= '9') || c == '_' || c == '-';
         }
-        // Keep legacy IDs; invalid discovery topic names were never supported by HA.
-        if (!valid) {
-            id = network->getMacAddress();
-            id.replace(":", "");
-        }
-        id.concat(suffix);
+        // Select the identity before allocating: a failed copy must not create a second entity.
+        String id = valid ? String(configured) : network->getMacAddress();
+        if (!valid) id.replace(":", "");
+        if (!id.length() || !id.concat(suffix)) return String();
         return id;
     }
 
@@ -1446,106 +1462,50 @@ public:
                                        isDeviceStateComplete() ? "Online" : "Offline", true);
 		network->log()->notice(F("sendMqttHassAutodiscover-%s"), (removeDiscovery ? "remove" : "add"));
 		// https://www.home-assistant.io/docs/mqtt/discovery/
-		String topic=F("homeassistant/climate/");
-		String unique_id = discoveryId("_climate");
-		topic.concat(unique_id);
-		topic.concat(F("/config"));
-		WStringStream buffer(SIZE_JSON_PACKET - 128);
-        WStringStream* response = &buffer;
-		response->flush();
-		char str_temp[6];
-		dtostrf(this->temperaturePrecision->getDouble(), 3, 1, str_temp);
-		if (!removeDiscovery){
-			if (getThermostatModel() == MODEL_BHT_002_GBLW ){
-				response->printf_P(MQTT_HASS_AUTODISCOVERY_CLIMATE,
-					escapedForDiscovery(unique_id.c_str()).c_str(),
-					escapedForDiscovery(network->getFirmwareVersion().c_str()).c_str(),
-					escapedForDiscovery(network->getMacAddress().c_str()).c_str(),
-					escapedForDiscovery(network->getIdx()).c_str(),
-					escapedForDiscovery(network->getApplicationName().c_str()).c_str(),
-					escapedForDiscovery(network->getFirmwareVersion().c_str()).c_str(),
-					escapedForDiscovery(network->getDeviceIp().toString().c_str()).c_str(),
-					escapedForDiscovery(network->getMqttTopic()).c_str(),
-					str_temp, str_temp
-				);
-			} else if (getThermostatModel() == MODEL_BAC_002_ALW ){
-				response->printf_P(MQTT_HASS_AUTODISCOVERY_AIRCO,
-					escapedForDiscovery(unique_id.c_str()).c_str(),
-					escapedForDiscovery(network->getFirmwareVersion().c_str()).c_str(),
-					escapedForDiscovery(network->getMacAddress().c_str()).c_str(),
-					escapedForDiscovery(network->getIdx()).c_str(),
-					escapedForDiscovery(network->getApplicationName().c_str()).c_str(),
-					escapedForDiscovery(network->getFirmwareVersion().c_str()).c_str(),
-					escapedForDiscovery(network->getDeviceIp().toString().c_str()).c_str(),
-					escapedForDiscovery(network->getMqttTopic()).c_str(),
-					str_temp, str_temp
-				);
-			}
-		}
-		sent = !response->overflowed() && network->publishMqtt(topic.c_str(), response, true) && sent;
-		response->flush();
+        WStringStream buffer(SIZE_JSON_PACKET - 128);
+        auto publishConfig = [&](const char* component, const String& id) {
+            String topic;
+            if (!id.length() || buffer.overflowed() || !topic.concat(F("homeassistant/")) ||
+                !topic.concat(component) || !topic.concat("/") || !topic.concat(id) ||
+                !topic.concat(F("/config"))) return false;
+            return network->publishMqtt(topic.c_str(), &buffer, true);
+        };
+        String id = discoveryId("_climate");
+        const bool heating = getThermostatModel() == MODEL_BHT_002_GBLW;
+        const bool cooling = getThermostatModel() == MODEL_BAC_002_ALW;
+        String firmware, mac;
+        if (!removeDiscovery) {
+            firmware = network->getFirmwareVersion();
+            mac = network->getMacAddress();
+            if (!firmware.length() || !mac.length()) return false;
+            if (heating || cooling) {
+                const String name = network->getApplicationName();
+                const String ip = network->getDeviceIp().toString();
+                if (!name.length() || !ip.length()) return false;
+                char precision[6];
+                dtostrf(temperaturePrecision->getDouble(), 3, 1, precision);
+                if (!writeDiscoveryTemplate(buffer, heating ? MQTT_HASS_AUTODISCOVERY_CLIMATE : MQTT_HASS_AUTODISCOVERY_AIRCO,
+                        {id.c_str(), firmware.c_str(), mac.c_str(), network->getIdx(), name.c_str(),
+                         firmware.c_str(), ip.c_str(), network->getMqttTopic(), precision, precision})) return false;
+            }
+        }
+        sent = publishConfig("climate", id) && sent;
 
-		unique_id = discoveryId("_sensor");
-		topic=F("homeassistant/sensor/"); 
-		topic.concat(unique_id);
-		topic.concat(F("/config"));
-		if (!removeDiscovery){
-				response->printf_P(MQTT_HASS_AUTODISCOVERY_SENSOR,
-				escapedForDiscovery(unique_id.c_str()).c_str(),
-				escapedForDiscovery(network->getFirmwareVersion().c_str()).c_str(),
-				escapedForDiscovery(network->getMacAddress().c_str()).c_str(),
-				escapedForDiscovery(network->getMqttTopic()).c_str()
-			);
-		}
-		sent = !response->overflowed() && network->publishMqtt(topic.c_str(), response, true) && sent;
-		response->flush();
-
-        {
-			unique_id = discoveryId("_floorsensor");
-			topic=F("homeassistant/sensor/"); 
-			topic.concat(unique_id);
-			topic.concat(F("/config"));
-			if (!removeDiscovery && getThermostatModel() == MODEL_BHT_002_GBLW && this->floorSensor->getBoolean()){
-				response->printf_P(MQTT_HASS_AUTODISCOVERY_SENSORFLOOR,
-					escapedForDiscovery(unique_id.c_str()).c_str(),
-					escapedForDiscovery(network->getFirmwareVersion().c_str()).c_str(),
-					escapedForDiscovery(network->getMacAddress().c_str()).c_str(),
-					escapedForDiscovery(network->getMqttTopic()).c_str()
-				);
-			}
-			sent = !response->overflowed() && network->publishMqtt(topic.c_str(), response, true) && sent;
-			response->flush();
-		}
-
-		unique_id = discoveryId("_rssi");
-		topic=F("homeassistant/sensor/"); 
-		topic.concat(unique_id);
-		topic.concat(F("/config"));
-		if (!removeDiscovery){
-			response->printf_P(MQTT_HASS_AUTODISCOVERY_SENSORRSSI,
-				escapedForDiscovery(unique_id.c_str()).c_str(),
-				escapedForDiscovery(network->getFirmwareVersion().c_str()).c_str(),
-				escapedForDiscovery(network->getMacAddress().c_str()).c_str(),
-				escapedForDiscovery(network->getMqttTopic()).c_str()
-			);
-		}
-		sent = !response->overflowed() && network->publishMqtt(topic.c_str(), response, true) && sent;
-		response->flush();
-		
-		unique_id = discoveryId("_ip");
-		topic=F("homeassistant/sensor/"); 
-		topic.concat(unique_id);
-		topic.concat(F("/config"));
-		if (!removeDiscovery){
-			response->printf_P(MQTT_HASS_AUTODISCOVERY_SENSORIP,
-				escapedForDiscovery(unique_id.c_str()).c_str(),
-				escapedForDiscovery(network->getFirmwareVersion().c_str()).c_str(),
-				escapedForDiscovery(network->getMacAddress().c_str()).c_str(),
-				escapedForDiscovery(network->getMqttTopic()).c_str()
-			);
-		}
-		sent = !response->overflowed() && network->publishMqtt(topic.c_str(), response, true) && sent;
-		response->flush();
+        struct Sensor { const char* suffix; PGM_P format; };
+        const Sensor sensors[] = {
+            {"_sensor", MQTT_HASS_AUTODISCOVERY_SENSOR},
+            {"_floorsensor", heating && floorSensor->getBoolean() ? MQTT_HASS_AUTODISCOVERY_SENSORFLOOR : nullptr},
+            {"_rssi", MQTT_HASS_AUTODISCOVERY_SENSORRSSI},
+            {"_ip", MQTT_HASS_AUTODISCOVERY_SENSORIP}
+        };
+        for (const auto& sensor : sensors) {
+            buffer.flush();
+            id = discoveryId(sensor.suffix);
+            if (!removeDiscovery && sensor.format &&
+                !writeDiscoveryTemplate(buffer, sensor.format,
+                    {id.c_str(), firmware.c_str(), mac.c_str(), network->getMqttTopic()})) return false;
+            sent = publishConfig("sensor", id) && sent;
+        }
 		return sent;
 	}
 

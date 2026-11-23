@@ -45,7 +45,7 @@ WClock *wClock;
 #endif
 
 void setup() {
-    // NTP can wait for one second; retain a full UART burst until the loop resumes.
+    // Retain a full MCU burst while the network stack is busy.
     Serial.setRxBufferSize(1024);
     Serial.begin(SERIALSPEED);
 

@@ -24,9 +24,11 @@ If you forget the administrator password, use the **Wi-Fi setup function on the 
 
 See [Wi-Fi recovery](README.md#optional-bssid-lock-and-recovery) for timing, alternate automatic AP addresses and limitations, and [administration](README.md#administration-and-security) for password storage and downgrade compatibility.
 
-### Saving settings in 1.27.0
+### Saving settings
 
-Network fields, BSSID and long passwords are written in one checked EEPROM commit; device settings are also batched. A storage error is shown instead of a success page or scheduled reboot, and the previous in-memory settings are restored. Autosaves are then blocked until a complete Network Configuration save succeeds. Keep power connected during saves: a single-sector EEPROM cannot preserve the old flash contents through every power interruption or physical write failure. If a save fails, check the device and retain your settings before rebooting.
+A network save includes the BSSID, credentials and extended fields in one configuration image. Device forms also save as a batch. The ESP8266 alternates between two sectors and validates each image with a CRC. If power goes out while saving, the next boot loads the newest complete image. Reading a current configuration or saving an identical image requires no sector erase. Migrating an older layout can require a write.
+
+If a form reports a storage error, the device restores the previous form values in RAM and cancels the scheduled restart. A complete network save can recover from an ordinary write failure. A flash read error or an uncertain final write blocks further writes until reboot. After restarting, check which configuration actually loaded. Older firmware reads only the original sector and can see an earlier password or network configuration.
 
 Administrator login uses expiring, boot-local Digest challenges with request-target and replay checks. Existing passwords and the optional login/recovery settings are unchanged. HTTP remains unencrypted.
 
@@ -113,6 +115,8 @@ In settings menu of MCU (option 4) you can switch between internal (IN), externa
   * Hint: Long pressing the rightest button for 5 seconds (while device switched on) the displays shows external temperature.
 
 ## 4. Configure clock settings
+
+The ESP8266 queries the configured NTP server in the background when Wi-Fi connects and synchronizes every five minutes after a successful reply. A server outage leaves the thermostat serial interface responsive. The clock runs from its last accepted time for 48 hours. After that the firmware marks time invalid and waits for a new synchronization before sending time to the thermostat controller. **Info** shows the client state and the age of the last successful synchronization.
 
 * Go to 'Configure clock'
 * Modify 'NTP server' for time synchronization

@@ -71,7 +71,7 @@ class MqttDeliveryTests(unittest.TestCase):
 #include "Arduino.h"
 #include <functional>
 const int MQTT_CONNECTION_TIMEOUT=-4,MQTT_CONNECTION_LOST=-3,MQTT_SOCKET_TIMEOUT=2;
-struct Client{int value=-1;bool stopped=false;int available(){return 1;}int read(){return value;}void stop(){stopped=true;}};
+struct Client{int value=-1;bool stopped=false;bool connected(){return !stopped;}int available(){return 1;}int read(){return value;}void stop(){stopped=true;}};
 struct Probe{Client client;Client*_client=&client;int _state=0;unsigned long packetStarted=0;std::function<void()>onIdle;
 '''+native.method(MQTT, 'readByte')+r'''
 };
@@ -126,7 +126,8 @@ const char*PROP_IDX="idx";
 struct WDevice{unsigned long lastStateNotify=123;WProperty value{"v","V",BOOLEAN};WProperty*firstProperty=&value;
  WDevice(){value.setBoolean(true);value.setUnChanged();}
  bool isDeviceStateComplete(){return true;}bool isMainDevice(){return false;}
- void toJsonValues(WJson*j,int){j->propertyBoolean("v",true);}bool isMqttRetain(){return true;}
+ bool oversized=false;
+ void toJsonValues(WJson*j,int){if(oversized)j->propertyString("data",std::string(180,'x').c_str());else j->propertyBoolean("v",true);}bool isMqttRetain(){return true;}
  bool isVisible(int){return true;}bool isMqttSendChangedValues(){return true;}};
 struct Log{template<class...T>void notice(T...){}template<class...T>void verbose(T...){}template<class...T>void warning(T...){}};
 struct Mqtt{bool succeeds=false;unsigned calls=0;bool isReadingPacket(){return false;}bool publish(const char*,const char*,bool){++calls;return succeeds;}int state(){return 0;}};
@@ -141,7 +142,10 @@ struct Probe{Log logger;Log*wlog=&logger;Mqtt mqtt;Mqtt*mqttClient=&mqtt;String 
  assert(p.mqtt.calls==1&&d.lastStateNotify==0&&!p.connected&&!d.value.isChanged());
  p.mqttSendDeviceState("state",&d);assert(p.mqtt.calls==1);
  p.connected=true;p.mqtt.succeeds=true;testMillis=2000;p.mqttSendDeviceState("state",&d);
- assert(p.mqtt.calls==2&&d.lastStateNotify==2000&&d.value.isChanged());}
+ assert(p.mqtt.calls==2&&d.lastStateNotify==2000&&d.value.isChanged());
+ d.oversized=true;p.mqttSendDeviceState("state",&d);
+ assert(p.mqtt.calls==2&&d.lastStateNotify==0&&p.connected);
+ d.oversized=false;p.mqttSendDeviceState("state",&d);assert(p.mqtt.calls==3&&d.lastStateNotify==2000);}
 '''
         self.compile_run(source, 'state_publish_retry')
 

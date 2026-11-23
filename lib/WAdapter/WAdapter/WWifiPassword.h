@@ -25,38 +25,38 @@ public:
 
     static String load(const char* ssid, const char* legacyPassword) {
         String result;
-        EEPROM.begin(EEPROM_SIZE);
-        if (EEPROM.length() != EEPROM_SIZE) return result;
-        const int length = EEPROM.read(514);
-        if (EEPROM.read(512) == 0x57 && EEPROM.read(513) == 1 && length > 32 && length <= 64) {
+        settingsFlash.begin(EEPROM_SIZE);
+        if (settingsFlash.length() != EEPROM_SIZE) { settingsFlash.end(); return result; }
+        const int length = settingsFlash.read(514);
+        if (settingsFlash.read(512) == 0x57 && settingsFlash.read(513) == 1 && length > 32 && length <= 64) {
             char password[65]{};
-            for (int i = 0; i < length; ++i) password[i] = EEPROM.read(520 + i);
+            for (int i = 0; i < length; ++i) password[i] = settingsFlash.read(520 + i);
             uint32_t stored;
-            EEPROM.get(516, stored);
+            settingsFlash.get(516, stored);
             if (strlen(legacyPassword) == 32 && !strncmp(password, legacyPassword, 32) &&
                 valid(String(password)) && strlen(password) == static_cast<unsigned>(length) && checksum(ssid, password) == stored)
                 result = password;
         }
-        EEPROM.end();
+        settingsFlash.end();
         return result;
     }
 
     static bool save(const char* ssid, const String& password, bool staged = false) {
         if (!valid(password)) return false;
-        if (!staged) EEPROM.begin(EEPROM_SIZE);
-        if (EEPROM.length() != EEPROM_SIZE) return false;
-        EEPROM.write(512, password.length() > 32 ? 0x57 : 0xFF);
-        EEPROM.write(513, 1);
-        EEPROM.write(514, static_cast<byte>(password.length()));
-        EEPROM.write(515, 0);
+        if (!staged) settingsFlash.begin(EEPROM_SIZE);
+        if (settingsFlash.length() != EEPROM_SIZE) { if (!staged) settingsFlash.end(); return false; }
+        settingsFlash.write(512, password.length() > 32 ? 0x57 : 0xFF);
+        settingsFlash.write(513, 1);
+        settingsFlash.write(514, static_cast<byte>(password.length()));
+        settingsFlash.write(515, 0);
         const uint32_t hash = checksum(ssid, password.c_str());
-        EEPROM.put(516, hash);
+        settingsFlash.put(516, hash);
         for (int i = 0; i < 64; ++i)
-            EEPROM.write(520 + i, i < static_cast<int>(password.length()) ? static_cast<byte>(password[i]) : 0);
-        const bool saved = staged || EEPROM.commit();
+            settingsFlash.write(520 + i, i < static_cast<int>(password.length()) ? static_cast<byte>(password[i]) : 0);
+        const bool saved = staged || settingsFlash.commit();
         if (!staged) {
-            if (!saved) EEPROM.begin(EEPROM_SIZE);
-            EEPROM.end();
+            if (!saved) settingsFlash.begin(EEPROM_SIZE);
+            settingsFlash.end();
         }
         return saved;
     }

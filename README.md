@@ -104,7 +104,7 @@ The firmware supports Wi-Fi passphrases of **8–63 bytes**, including spaces an
 
 Long Wi-Fi passwords use a checked extension of the existing EEPROM area. All legacy configuration fields and BSSID addresses stay in place. Hostnames and MQTT usernames support **32 bytes**; MQTT passwords and base topics support **64 bytes**. MQTT has its own **Keep saved MQTT password** checkbox: uncheck it to change or clear the saved value, including setting the literal password `___NOCHANGE___`.
 
-Back up network values before downgrading. Firmware without these extensions cannot preserve long values; change them to values supported by the destination firmware first. The original limits were 16 bytes for hostname/MQTT username and 32 bytes for Wi-Fi password/MQTT password/base topic.
+Record the current network and device settings before downgrading. Older firmware reads only the original EEPROM sector and may start with an earlier configuration, including earlier credentials. Recheck settings when returning to this firmware. Firmware without these extensions cannot preserve long values; change them to values supported by the destination firmware first. The original limits were 16 bytes for hostname/MQTT username and 32 bytes for Wi-Fi password/MQTT password/base topic.
 
 **Forgotten administrator password (full firmware):** use the thermostat's physical Wi-Fi setup gesture. On supported Beca controllers, hold Down while the thermostat is off, or Power + Down while it is on, until Wi-Fi setup is requested (typically around eight seconds; the gesture depends on the model). Join `WThermostat-<chip-id>` with AP key `12345678` and open `http://192.168.4.1`. For five minutes, requests received on that AP can change network/login settings without the forgotten administrator password. Disable **Require administrator login** while keeping the saved Wi-Fi password, or enter replacement Wi-Fi credentials, then save. Other settings are retained. The normal LAN interface does not gain this bypass; automatic fallback and MQTT AP commands do not enable it. Anyone nearby who knows the AP key can use this physically activated window. Minimal firmware has no thermostat-button recovery because it omits the MCU integration.
 
@@ -142,6 +142,8 @@ Use MQTT discovery rather than copying the old `climate: - platform: mqtt` examp
 2. Configure the thermostat to use that same broker and enable MQTT and Home Assistant discovery in Network Configuration.
 3. Use the supported defaults: discovery prefix **`homeassistant`** and Home Assistant Birth topic **`homeassistant/status`** with payload **`online`**. Custom prefixes/Birth topics are not automatically detected by this firmware.
 4. Check the MQTT device/entities in Home Assistant. Climate availability also waits for a complete valid MCU state, avoiding incomplete startup readings.
+
+While Wi-Fi is connected, MQTT retries after 30 seconds on a transport failure and after five minutes when the broker rejects the login. A Wi-Fi disconnect resets the retry timer. Closing the MQTT transport lets the broker publish the retained `Offline` Last Will.
 
 Discovery includes climate, temperature sensors, network diagnostics and the applicable optional floor-temperature entity. Existing supported entity IDs are retained. The firmware republishes discovery and retained state after MQTT reconnection and supported HA Birth events, retries failed discovery and clears obsolete configurations. A thermostat reboot is not required for every HA restart.
 
@@ -278,7 +280,7 @@ Native regressions cover UART command ordering, startup readiness, schedules, EC
 ## Practical limits
 
 - The ESP8266 has limited RAM. Large simultaneous transfers, particularly with Verbose WebLog, can return HTTP 503; retry after other transfers finish. Incomplete pages are rejected rather than served as successful responses.
-- EEPROM uses a single flash sector and is **not power-loss atomic**. Keep power connected while saving. After a reported write failure, automatic saves stay blocked until a complete Network Configuration save succeeds; investigate the storage error before rebooting or retrying.
+- Configuration saves alternate between two flash sectors. The firmware verifies the replacement before marking it complete and checks the generation and CRC at boot. An interrupted save can leave either complete configuration active. This protection covers settings. Power loss while the bootloader installs a firmware image can still require serial reflashing.
 - Firmware tests do not establish physical compatibility, radio reliability or controller behavior on every thermostat model.
 
 ## Reporting a problem

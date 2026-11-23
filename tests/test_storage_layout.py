@@ -35,6 +35,7 @@ int main(){
         const unsigned expected=flag==FLAG_OPTIONS_NETWORK_V1?NETWORKSETTINGS_PRE_FAS123:
             flag==FLAG_OPTIONS_NETWORK_V2?NETWORKSETTINGS_PR2:flag==FLAG_OPTIONS_NETWORK_V3?NETWORKSETTINGS_CURRENT:NETWORKSETTINGS_UNKNOWN;
         assert(settings.getNetworkSettingsVersion()==expected);
+        assert(settings.settingsNeedsUpdate()==(flag!=FLAG_OPTIONS_NETWORK_CURRENT));
         assert(settings.getSettingsNetworkIsCurrent()==(flag==FLAG_OPTIONS_NETWORK_V3));
         assert(EEPROM.bytes==before);
     }

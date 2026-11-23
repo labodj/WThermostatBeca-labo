@@ -149,6 +149,11 @@ public:
 			const char *willTopic, uint8_t willQos, bool willRetain,
 			const char *willMessage, bool cleanSession) {
 		if (!connected()) {
+            _state = MQTT_CONNECT_FAILED;
+            if (maxPacketSize < MQTT_MAX_HEADER_SIZE + 12 || maxPacketSize > UINT16_MAX - MQTT_MAX_HEADER_SIZE ||
+                !id || (willTopic && !willMessage)) {
+                return false;
+            }
 			int result = 0;
 
 			if (!domain.equals("")) {
@@ -216,11 +221,20 @@ public:
 					}
 				}
 
-				write(MQTTCONNECT, buffer, length - MQTT_MAX_HEADER_SIZE);
+				if (!write(MQTTCONNECT, buffer, length - MQTT_MAX_HEADER_SIZE)) {
+                    _state = MQTT_CONNECT_FAILED;
+                    _client->stop();
+                    return false;
+                }
 
 				lastInActivity = lastOutActivity = millis();
 
 				while (!_client->available()) {
+                    if (!_client->connected()) {
+                        _state = MQTT_CONNECTION_LOST;
+                        _client->stop();
+                        return false;
+                    }
                     yield();
                     if (onIdle) onIdle();
 					unsigned long t = millis();
@@ -234,7 +248,9 @@ public:
 				uint8_t llen;
 				uint16_t len = readPacket(&llen);
 
-				if (len == 4) {
+				if (len == 4 && buffer[0] == MQTTCONNACK && buffer[1] == 2 &&
+                    (buffer[2] == 0 || (buffer[2] == 1 && !cleanSession && buffer[3] == 0)) &&
+                    buffer[3] <= MQTT_CONNECT_UNAUTHORIZED) {
 					if (buffer[3] == 0) {
 						lastInActivity = millis();
 						pingOutstanding = false;
@@ -243,7 +259,9 @@ public:
 					} else {
 						_state = buffer[3];
 					}
-				}
+				} else if (len || _client->connected()) {
+                    _state = MQTT_CONNECT_BAD_PROTOCOL;
+                }
 				_client->stop();
 			} else {
 				_state = MQTT_CONNECT_FAILED;
@@ -368,10 +386,8 @@ public:
 			}
 			size_t hlen = buildHeader(header, buffer,
 					plength + length - MQTT_MAX_HEADER_SIZE);
-			uint16_t rc = _client->write(buffer + (MQTT_MAX_HEADER_SIZE - hlen),
-					length - (MQTT_MAX_HEADER_SIZE - hlen));
-			lastOutActivity = millis();
-			return (rc == (length - (MQTT_MAX_HEADER_SIZE - hlen)));
+            return writePacketBytes(buffer + MQTT_MAX_HEADER_SIZE - hlen,
+                                    length - MQTT_MAX_HEADER_SIZE + hlen);
 		}
 		return false;
 	}
@@ -395,10 +411,10 @@ public:
 	}
 
 	bool subscribe(const char *topic, uint8_t qos) {
-		if (qos > 1) {
+		if (!topic || !*topic || qos > 1) {
 			return false;
 		}
-		if (this->getMaxPacketSize() < 9 + strlen(topic)) {
+		if (this->getMaxPacketSize() < MQTT_MAX_HEADER_SIZE + 5 + strlen(topic)) {
 			// Too long
 			return false;
 		}
@@ -471,8 +487,7 @@ public:
 				} else {
 					buffer[0] = MQTTPINGREQ;
 					buffer[1] = 0;
-					_client->write(buffer, 2);
-					lastOutActivity = t;
+					if (!writePacketBytes(buffer, 2)) return false;
 					lastInActivity = t;
 					pingOutstanding = true;
 				}
@@ -515,8 +530,7 @@ public:
 								buffer[1] = 2;
 								buffer[2] = (msgId >> 8);
 								buffer[3] = (msgId & 0xFF);
-								_client->write(buffer, 4);
-								lastOutActivity = t;
+								if (!writePacketBytes(buffer, 4)) return false;
 
 							} else {
 								payload = reinterpret_cast<char*>(buffer) + llen + 3 + tl;
@@ -537,7 +551,7 @@ public:
 					} else if (type == MQTTPINGREQ) {
 						buffer[0] = MQTTPINGRESP;
 						buffer[1] = 0;
-						_client->write(buffer, 2);
+						if (!writePacketBytes(buffer, 2)) return false;
 					} else if (type == MQTTPINGRESP) {
 						pingOutstanding = false;
 					}
@@ -586,23 +600,23 @@ private:
 	Client *_client;
 	int maxPacketSize;
 	uint8_t *buffer; //[MQTT_MAX_PACKET_SIZE];
-	uint16_t nextMsgId;
+	uint16_t nextMsgId = 0;
 	unsigned long lastOutActivity;
 	unsigned long lastInActivity;
 	bool pingOutstanding;
 	MQTT_CALLBACK_SIGNATURE;
 	IPAddress ip;
 	String domain;
-	uint16_t port;
+	uint16_t port = 1883;
 	Stream *stream;
 	int _state;
 
 	uint16_t readPacket(uint8_t *lengthLength) {
 		uint16_t len = 0;
+		packetStarted = millis();
 		if (!readByte(buffer, &len))
 			return 0;
 		bool isPublish = (buffer[0] & 0xF0) == MQTTPUBLISH;
-        packetStarted = millis();
 		uint32_t multiplier = 1;
 		uint16_t length = 0;
 		uint8_t digit = 0;
@@ -657,7 +671,7 @@ private:
 			len++;
 		}
 
-		if (!this->stream && len > this->getMaxPacketSize()) {
+		if (len > this->getMaxPacketSize()) {
 			len = 0; // This will cause the packet to be ignored.
 		}
 
@@ -668,6 +682,11 @@ private:
 	bool readByte(uint8_t *result) {
 		unsigned long previousMillis = millis();
 		while (!_client->available()) {
+            if (!_client->connected()) {
+                _state = MQTT_CONNECTION_LOST;
+                _client->stop();
+                return false;
+            }
 			yield();
             if (onIdle) { onIdle(); }
 			unsigned long currentMillis = millis();
@@ -699,29 +718,30 @@ private:
 		return false;
 	}
 
-	bool write(uint8_t header, uint8_t *buf, uint16_t length) {
-		uint16_t rc;
-		uint8_t hlen = buildHeader(header, buf, length);
+    // A later packet cannot complete an earlier, partially written MQTT frame.
+    bool writePacketBytes(const uint8_t* data, size_t length) {
+        if (_client->write(data, length) != length) {
+            abort();
+            return false;
+        }
+        lastOutActivity = millis();
+        return true;
+    }
 
+    bool write(uint8_t header, uint8_t *buf, uint16_t length) {
+        const size_t headerLength = buildHeader(header, buf, length);
+        const uint8_t* data = buf + MQTT_MAX_HEADER_SIZE - headerLength;
+        size_t remaining = length + headerLength;
 #ifdef MQTT_MAX_TRANSFER_SIZE
-       uint8_t* writeBuf = buf+(MQTT_MAX_HEADER_SIZE-hlen);
-       uint16_t bytesRemaining = length+hlen;  //Match the length type
-       uint8_t bytesToWrite;
-       bool result = true;
-       while((bytesRemaining > 0) && result) {
-           bytesToWrite = (bytesRemaining > MQTT_MAX_TRANSFER_SIZE)?MQTT_MAX_TRANSFER_SIZE:bytesRemaining;
-           rc = _client->write(writeBuf,bytesToWrite);
-           result = (rc == bytesToWrite);
-           bytesRemaining -= rc;
-           writeBuf += rc;
-       }
-       return result;
-   #else
-		rc = _client->write(buf + (MQTT_MAX_HEADER_SIZE - hlen), length + hlen);
-		lastOutActivity = millis();
-		return (rc == hlen + length);
+        static_assert(MQTT_MAX_TRANSFER_SIZE > 0, "MQTT transfer size must be positive");
+        while (remaining > MQTT_MAX_TRANSFER_SIZE) {
+            if (!writePacketBytes(data, MQTT_MAX_TRANSFER_SIZE)) return false;
+            data += MQTT_MAX_TRANSFER_SIZE;
+            remaining -= MQTT_MAX_TRANSFER_SIZE;
+        }
 #endif
-	}
+        return writePacketBytes(data, remaining);
+    }
 
 	uint16_t writeString(const char *string, uint8_t *buf, uint16_t pos) {
 		//const char *idp = string;

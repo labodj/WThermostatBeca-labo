@@ -1,10 +1,16 @@
 #ifndef W_SETTINGS_H
 #define W_SETTINGS_H
 
+#ifdef ARDUINO_ARCH_ESP8266
+#include "WSettingsFlash.h"
+inline WSettingsFlash settingsFlash((reinterpret_cast<uintptr_t>(&_settings_backup_start) - 0x40200000UL) / 4096);
+#else
 #include "EEPROM.h"
+inline auto& settingsFlash = EEPROM;
+#endif
 #include <new>
 #include "WLog.h"
-#include "WProperty.h"
+#include "WStringProperty.h"
 
 const byte STORED_FLAG_OLDLOW = 0x59; //1.00 ..
 const byte STORED_FLAG_OLDHIGH = 0x63; //1.02
@@ -50,12 +56,11 @@ public:
 		this->log = log;
 		this->appSettingsFlag = appSettingsFlag;
 		this->reallyReadSettings = true;
-		this->_settingsNeedsUpdate=true;
 		this->_settingsNetworkIsCurrent=false;
 		this->_settingsApplicationIsCurrent=false;
 		this->_compatMode=compatMode;
-		EEPROM.begin(EEPROM_SIZE);
-		uint8_t epromStored = EEPROM.read(0);
+		settingsFlash.begin(EEPROM_SIZE);
+		uint8_t epromStored = settingsFlash.read(0);
 		this->log->trace(F("settings: old byte 0: 0x%02x"), epromStored);
 		this->_existsSettingsNetwork = false;
 		this->_existsSettingsApplication = false;		
@@ -85,7 +90,7 @@ public:
                 break;
 			}
 
-			uint8_t epromStoredApplication = EEPROM.read(1);
+			uint8_t epromStoredApplication = settingsFlash.read(1);
 			this->log->trace(F("settings: old byte 1: 0x%02x"), epromStoredApplication);
 			this->_applicationSettingsVersion=epromStoredApplication;
 			if (epromStoredApplication == this->appSettingsFlag){
@@ -106,8 +111,9 @@ public:
 			}
 		}
 
+        _settingsNeedsUpdate = !_settingsNetworkIsCurrent || !_settingsApplicationIsCurrent;
 		this->log->trace(F("WSettings done, networkSettingsVersion: 0x%02x, app: 0x%02x"), this->getNetworkSettingsVersion(), this->getApplicationSettingsVersion());
-		EEPROM.end();
+		settingsFlash.end();
 	}
 
     ~WSettings() {
@@ -126,8 +132,8 @@ public:
         if (!_settingsNetworkIsCurrent) return true;
         for (const WSettingItem* item = firstSetting; item; item = item->next) {
             if (item->value != property) continue;
-            EEPROM.begin(EEPROM_SIZE);
-            const bool saved = EEPROM.length() == EEPROM_SIZE && save(item) && EEPROM.commit();
+            settingsFlash.begin(EEPROM_SIZE);
+            const bool saved = settingsFlash.length() == EEPROM_SIZE && save(item) && settingsFlash.commit();
             closeStorage(saved);
             return saved;
         }
@@ -137,10 +143,10 @@ public:
     bool save() {
         if (updating) return true;
         if (!writesEnabled) return false;
-        EEPROM.begin(EEPROM_SIZE);
-        const bool saved = EEPROM.length() == EEPROM_SIZE && stageSettings() && EEPROM.commit();
+        settingsFlash.begin(EEPROM_SIZE);
+        const bool saved = settingsFlash.length() == EEPROM_SIZE && stageSettings() && settingsFlash.commit();
         closeStorage(saved);
-        if (saved) _settingsNetworkIsCurrent = true;
+        if (saved) { _settingsNetworkIsCurrent = true; _settingsNeedsUpdate = false; }
         return saved;
     }
 
@@ -161,9 +167,9 @@ public:
                 }
             }
         }
-        EEPROM.begin(EEPROM_SIZE);
-        if (EEPROM.length() != EEPROM_SIZE) {
-            EEPROM.end(); delete[] snapshot; snapshot = nullptr; return false;
+        settingsFlash.begin(EEPROM_SIZE);
+        if (settingsFlash.length() != EEPROM_SIZE) {
+            settingsFlash.end(); delete[] snapshot; snapshot = nullptr; return false;
         }
         updating = true;
         return true;
@@ -171,7 +177,7 @@ public:
 
     bool endUpdate(bool valid = true) {
         if (!updating) return false;
-        const bool saved = valid && stageSettings() && EEPROM.commit();
+        const bool saved = valid && stageSettings() && settingsFlash.commit();
         closeStorage(saved, valid);
         if (!saved) {
             unsigned i = 0;
@@ -189,7 +195,7 @@ public:
                 }
             }
         }
-        if (saved) { _settingsNetworkIsCurrent = true; writesEnabled = true; }
+        if (saved) { _settingsNetworkIsCurrent = true; _settingsNeedsUpdate = false; writesEnabled = true; }
         updating = false;
         delete[] snapshot; snapshot = nullptr;
         return saved;
@@ -271,20 +277,26 @@ public:
 					settingItem->address + startAddressReadOffset, property->getId(), property->getLength(), EEPROM_SIZE);
 					return;
 				}
-				EEPROM.begin(EEPROM_SIZE);
+				settingsFlash.begin(EEPROM_SIZE);
+                if (settingsFlash.length() != EEPROM_SIZE) {
+                    writesEnabled = false;
+                    settingsFlash.end();
+                    return;
+                }
 				switch (property->getType()) {
 				case BOOLEAN:
-					property->setBoolean(EEPROM.read(settingItem->address + startAddressReadOffset) == 0xFF);
+					property->setBoolean(settingsFlash.read(settingItem->address + startAddressReadOffset) == 0xFF);
 					break;
-				case DOUBLE:
-					double d;
-					EEPROM.get(settingItem->address + startAddressReadOffset, d);
+				case DOUBLE: {
+					double d = 0;
+					settingsFlash.get(settingItem->address + startAddressReadOffset, d);
 					property->setDouble(d);
 					break;
+                }
 				case INTEGER: {
 					byte low, high;
-					low = EEPROM.read(settingItem->address + startAddressReadOffset);
-					high = EEPROM.read(settingItem->address + startAddressReadOffset + 1);
+					low = settingsFlash.read(settingItem->address + startAddressReadOffset);
+					high = settingsFlash.read(settingItem->address + startAddressReadOffset + 1);
 					int value = static_cast<int16_t>(low | (high << 8));
 					property->setInteger(value);
 					break;
@@ -292,19 +304,19 @@ public:
 				case LONG: {
 					uint32_t value = 0;
 					for (int i = 0; i < 4; ++i)
-						value |= static_cast<uint32_t>(EEPROM.read(settingItem->address + startAddressReadOffset + i)) << (8 * i);
+						value |= static_cast<uint32_t>(settingsFlash.read(settingItem->address + startAddressReadOffset + i)) << (8 * i);
 					property->setLong(value <= INT32_MAX ? static_cast<long>(value) : -1L - static_cast<long>(UINT32_MAX - value));
 					break;
 				}			
 				case UNSIGNED_LONG: {
 					uint32_t value = 0;
 					for (int i = 0; i < 4; ++i)
-						value |= static_cast<uint32_t>(EEPROM.read(settingItem->address + startAddressReadOffset + i)) << (8 * i);
+						value |= static_cast<uint32_t>(settingsFlash.read(settingItem->address + startAddressReadOffset + i)) << (8 * i);
 					property->setUnsignedLong(value);
 					break;
 				}
 				case BYTE: {
-                    byte by = EEPROM.read(settingItem->address + startAddressReadOffset);
+                    byte by = settingsFlash.read(settingItem->address + startAddressReadOffset);
 					property->setByte(by);
                     log->trace(F("Byte loaded: '0x%02x'"), by);
 					break;
@@ -315,7 +327,7 @@ public:
 					delete[] rs;
 					break;
 				}
-				EEPROM.end();
+				settingsFlash.end();
 			} else {
 				log->trace(F("NOT reallyReading setting %s"), property->getId());
 			}
@@ -500,17 +512,17 @@ protected:
 		switch (setting->getType()){
 		case BOOLEAN:
 			//log->notice(F("Save boolean to EEPROM: id='%s'; value=%d"), setting->getId(), setting->getBoolean());
-			EEPROM.write(settingItem->address + startAddressSaveOffset, (setting->getBoolean() ? 0xFF : 0x00));
+			settingsFlash.write(settingItem->address + startAddressSaveOffset, (setting->getBoolean() ? 0xFF : 0x00));
 			break;
 		case BYTE:
-			EEPROM.write(settingItem->address + startAddressSaveOffset, setting->getByte());
+			settingsFlash.write(settingItem->address + startAddressSaveOffset, setting->getByte());
 			break;
 		case INTEGER:
 			byte low, high;
 			low = (setting->getInteger() & 0xFF);
 			high = ((setting->getInteger()>>8) & 0xFF);
-			EEPROM.write(settingItem->address + startAddressSaveOffset, low);
-			EEPROM.write(settingItem->address + startAddressSaveOffset + 1, high);
+			settingsFlash.write(settingItem->address + startAddressSaveOffset, low);
+			settingsFlash.write(settingItem->address + startAddressSaveOffset + 1, high);
 			break;
 		case LONG:
 			byte l1, l2, l3, l4;
@@ -518,10 +530,10 @@ protected:
 			l3 = ((setting->getLong() >> 8) & 0xFF);
 			l2 = ((setting->getLong() >> 16) & 0xFF);
 			l1 = ((setting->getLong() >> 24) & 0xFF);
-			EEPROM.write(settingItem->address + startAddressSaveOffset, l4);
-			EEPROM.write(settingItem->address + startAddressSaveOffset + 1, l3);
-			EEPROM.write(settingItem->address + startAddressSaveOffset + 2, l2);
-			EEPROM.write(settingItem->address + startAddressSaveOffset + 3, l1);
+			settingsFlash.write(settingItem->address + startAddressSaveOffset, l4);
+			settingsFlash.write(settingItem->address + startAddressSaveOffset + 1, l3);
+			settingsFlash.write(settingItem->address + startAddressSaveOffset + 2, l2);
+			settingsFlash.write(settingItem->address + startAddressSaveOffset + 3, l1);
 			break;
 		case UNSIGNED_LONG:
 			byte ul1, ul2, ul3, ul4;
@@ -529,13 +541,13 @@ protected:
 			ul3 = ((setting->getUnsignedLong() >> 8) & 0xFF);
 			ul2 = ((setting->getUnsignedLong() >> 16) & 0xFF);
 			ul1 = ((setting->getUnsignedLong() >> 24) & 0xFF);
-			EEPROM.write(settingItem->address + startAddressSaveOffset, ul4);
-			EEPROM.write(settingItem->address + startAddressSaveOffset + 1, ul3);
-			EEPROM.write(settingItem->address + startAddressSaveOffset + 2, ul2);
-			EEPROM.write(settingItem->address + startAddressSaveOffset + 3, ul1);
+			settingsFlash.write(settingItem->address + startAddressSaveOffset, ul4);
+			settingsFlash.write(settingItem->address + startAddressSaveOffset + 1, ul3);
+			settingsFlash.write(settingItem->address + startAddressSaveOffset + 2, ul2);
+			settingsFlash.write(settingItem->address + startAddressSaveOffset + 3, ul1);
 			break;
 		case DOUBLE:
-			EEPROM.put(settingItem->address + startAddressSaveOffset, setting->getDouble());
+			settingsFlash.put(settingItem->address + startAddressSaveOffset, setting->getDouble());
 			break;
 		case STRING:
 			writeString(settingItem->address + startAddressSaveOffset, setting->getLength(), setting->c_str());
@@ -555,13 +567,13 @@ private:
     void closeStorage(bool saved, bool attempted = true) {
         // end() retries dirty writes. Reload first after failure to avoid a hidden retry.
         if (!saved) {
-            EEPROM.begin(EEPROM_SIZE);
+            settingsFlash.begin(EEPROM_SIZE);
             if (attempted) {
                 writesEnabled = false;
                 log->error(F("Settings write failed; autosaves disabled until a complete network save succeeds"));
             }
         }
-        EEPROM.end();
+        settingsFlash.end();
     }
 
     bool stageSettings() {
@@ -571,8 +583,8 @@ private:
             if (!save(item)) return false;
             address += item->value->getLength();
         }
-        EEPROM.write(0, FLAG_OPTIONS_NETWORK_CURRENT);
-        EEPROM.write(1, appSettingsFlag);
+        settingsFlash.write(0, FLAG_OPTIONS_NETWORK_CURRENT);
+        settingsFlash.write(1, appSettingsFlag);
         return true;
     }
 
@@ -595,7 +607,7 @@ private:
 		int i = 0;
 		for (i = 0; i <= length; i++) {
 			if (i < length) {
-				byte k = EEPROM.read(address.value + i);
+				byte k = settingsFlash.read(address.value + i);
 				data[i] = static_cast<char>(k);
 				if (k == '\0') {
 					break;
@@ -617,10 +629,10 @@ private:
 			size = length;
 		}
 		for (size_t i = 0; i < size; i++) {
-			EEPROM.write(address.value + static_cast<int>(i), value[i]);
+			settingsFlash.write(address.value + static_cast<int>(i), value[i]);
 		}
 		if (size < static_cast<size_t>(length)) {
-			EEPROM.write(address.value + static_cast<int>(size), '\0');
+			settingsFlash.write(address.value + static_cast<int>(size), '\0');
 		}
 	}
 

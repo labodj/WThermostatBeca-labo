@@ -11,9 +11,9 @@
 
 #include <utility>
 #include <ESP8266WiFi.h>
-#include <NTPClient.h>
-#include <TimeLib.h>
-#include <WiFiUdp.h>
+#include <coredecls.h>
+#include <lwip/apps/sntp.h>
+#include <time.h>
 
 #include "../lib/WAdapter/WAdapter/WDevice.h"
 #include "../lib/WAdapter/WAdapter/WNetwork.h"
@@ -66,17 +66,15 @@ typedef struct {
     uint32_t local_time = 0;
     uint32_t daylight_saving_time = 0;
     uint32_t standard_time = 0;
-    uint32_t ntp_time = 0;
-    uint32_t midnight = 0;
-    uint32_t restart_time = 0;
+    uint16_t transitionYear = 0;
     int32_t time_timezone = 0;
-    uint8_t ntp_sync_minute = 0;
-    bool midnight_now = false;
-    bool user_time_entry = false;               // Override NTP by user setting
 } RTC;
 
 #define LEAP_YEAR(Y) ((( Y) > 0) && !((Y) % 4) && (((Y) % 100) || !((Y) % 400)))
 
+static constexpr uint32_t SECS_PER_MIN = 60;
+static constexpr uint32_t SECS_PER_HOUR = 3600;
+static constexpr uint32_t SECS_PER_DAY = 86400;
 static const uint8_t kDaysInMonth[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};  // API starts months from 1, this array starts from 0
 static const char kMonthNames[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
 const uint32_t START_VALID_TIME = 1451602800;  // Time is synced and after 2016-01-01
@@ -96,8 +94,8 @@ const char* PROP_VALIDTIME PROGMEM = "validTime";
 const char* PROP_OFFSET PROGMEM = "offset";
 const char* PROP_UPTIME PROGMEM = "uptime";
 
-WiFiUDP ntpUDP;
-NTPClient ntpClient(ntpUDP);
+// Keep the existing five-minute synchronization interval in the core SNTP client.
+extern "C" uint32_t sntp_update_delay_MS_rfc_not_less_than_15000() { return 300000; }
 
 class WClock : public WDevice {
    public:
@@ -192,76 +190,46 @@ class WClock : public WDevice {
             p->setLong(static_cast<long>(getUptime()));
         });
         this->addProperty(uptime);
-        lastTry = lastNtpSync = ntpTime = lastRun = 0;
-        lastDiff = 0;
-
-        ntpClient = NTPClient(ntpUDP, ntpServer->c_str());
+        sntp_servermode_dhcp(0);
+        settimeofday_cb([this](bool fromSntp) { if (fromSntp) syncPending = true; });
     }
 
     void loop(unsigned long now) override {
-        TIME_T tmpTime;
-        const int ntpRetryMinutes = 1;
-        const int ntpResyncMinutes = 5;
-        const int ntpInvalidateHours = 48;
-        bool notify=false;
-        //Invalid after 48 hours failed sync
-        if (isValidTime() && !(now - lastNtpSync < (ntpInvalidateHours * 60UL * 60 * 1000) )){
-            network->log()->error(F("No valid NTP Time since %d hours -> invalidating"), ntpInvalidateHours);
-        }
-        if (now - lastNtpSync >= ntpInvalidateHours * 60UL * 60 * 1000) validTime->setBoolean(false);
-
-        Rtc.utc_time=getEpochTime();
-        // calc retry - faster 3 minutes after boot
-        const unsigned long syncInterval = lastTry != lastNtpSync
-            ? ntpRetryMinutes * (now < 3UL * 60 * 1000 ? 20UL : 60UL) * 1000
-            : ntpResyncMinutes * 60UL * 1000;
-        if ((
-                (!isValidTime() && lastTry == 0) 
-                || (now - lastTry >= syncInterval)
-            ) && (WiFi.status() == WL_CONNECTED)) {
-            network->log()->trace(F("Time via NTP server '%s'"), ntpServer->c_str());
-            network->logHeap(PSTR("NTP Start"));
-            lastTry = now;
-            const uint32_t oldutc = getEpochTime();
-            if (ntpClient.update()) {
-                network->logHeap(PSTR("NTP GotTime"));
-                ntpTime = ntpClient.getEpochTime();
-                #ifdef NTPTESTSTART
-                ntpTime = NTPTESTSTART + (millis()/1000);
-                #endif
-                if (ntpTime > START_VALID_TIME) {
-                    if (validTime->getBoolean()){
-                        // don't save first diff
-                        lastDiff=static_cast<int64_t>(ntpTime) - oldutc;
-                    }
-                    Rtc.utc_time = ntpTime;
-                    BreakTime(ntpTime, tmpTime);
-                    RtcTime.year = tmpTime.year;
-                    Rtc.daylight_saving_time = RuleToTime(this->timeRuleDst, RtcTime.year);
-                    Rtc.standard_time = RuleToTime(this->timeRuleStd, RtcTime.year);
-                    network->log()->notice(F("NTP time synced: (%04d-%02d-%02d %02d:%02d:%02d, Weekday: %d, Epoch: %d, Dst: %d, Std: %d, OldUTC: %d, ntpTime: %d, Diff: %lld, Uptime: %d)"),
-                            tmpTime.year, tmpTime.month, tmpTime.day_of_month, tmpTime.hour, tmpTime.minute, tmpTime.second, tmpTime.day_of_week,
-                            ntpTime, Rtc.daylight_saving_time, Rtc.standard_time, oldutc, ntpTime, static_cast<long long>(lastDiff), getUptime() );
-
-                    validTime->setBoolean(true);
-                    notify=true;
-                    lastNtpSync = now;
-                } else {
-                    network->log()->error(F("NTP reports invalid time. (%d)"), ntpTime);
-                }
+        if (!syncPending && now - lastRun < 1000) return;
+        lastRun = now;
+        const bool connected = WiFi.status() == WL_CONNECTED;
+        if (connected != ntpRunning) {
+            if (connected) {
+                sntp_setservername(0, ntpServer->c_str());
+                sntp_init();
             } else {
-                network->log()->warning(F("NTP sync failed. "));
+                sntp_stop();
             }
-                 
+            // lwIP leaves SNTP disabled if it cannot allocate its UDP socket.
+            ntpRunning = connected && sntp_enabled();
         }
 
-        // -------------
-        if (!notify && now - lastRun < 1000) return;
-        lastRun=now;
-
-        //network->log()->verbose(F("Clock: epoch: %d,timezone_diff: %d, millis: %d, nextSync: %d, lastTry: %d, lastSync: %d"),
-        //    getEpochTime(), Rtc.time_timezone, now, nextSync, lastTry, lastNtpSync);
-
+        bool notify = false;
+        if (syncPending) {
+            syncPending = false;
+#ifdef NTPTESTSTART
+            const time_t sample = NTPTESTSTART + getUptime();
+#else
+            const time_t sample = time(nullptr);
+#endif
+            if (sample > START_VALID_TIME && static_cast<uint64_t>(sample) <= UINT32_MAX) {
+                if (isValidTime()) lastDiff = static_cast<int64_t>(sample) - getEpochTime();
+                lastSyncUs = micros64();
+                ntpTime = static_cast<uint32_t>(sample);
+                validTime->setBoolean(true);
+                notify = true;
+            }
+        }
+        if (isValidTime() && micros64() - lastSyncUs >= 48ULL * 3600 * 1000000) {
+            validTime->setBoolean(false);
+            network->log()->warning(F("No valid time synchronization for 48 hours"));
+        }
+        Rtc.utc_time = getEpochTime();
         Rtc.local_time = Rtc.utc_time + Rtc.time_timezone;
         BreakTime(Rtc.local_time, RtcTime);
 
@@ -272,6 +240,11 @@ class WClock : public WDevice {
                 newTz = (this->timezone_hours * 3600L) + (this->timezone_minutes * 60L * (this->timezone_hours < 0 ? -1 : 1));
 
             } else {
+                if (Rtc.transitionYear != RtcTime.year) {
+                    Rtc.transitionYear = RtcTime.year;
+                    Rtc.daylight_saving_time = RuleToTime(timeRuleDst, RtcTime.year);
+                    Rtc.standard_time = RuleToTime(timeRuleStd, RtcTime.year);
+                }
                 int32_t dstoffset = this->timeRuleDst.offset * 60L;
                 int32_t stdoffset = this->timeRuleStd.offset * 60L;
 
@@ -300,18 +273,6 @@ class WClock : public WDevice {
             }
         }
 
-        /* 
-        if (RtcTime.valid) {
-            if (!Rtc.midnight) {
-                Rtc.midnight = Rtc.local_time - (RtcTime.hour * 3600) - (RtcTime.minute * 60) - RtcTime.second;
-            }
-            if (!RtcTime.hour && !RtcTime.minute && !RtcTime.second) {
-                Rtc.midnight = Rtc.local_time;
-                Rtc.midnight_now = true;
-            }
-        }
-        */
-
         if (notify){
             this->offset->setReadOnly(false);
             this->offset->setInteger(Rtc.time_timezone);
@@ -330,21 +291,16 @@ class WClock : public WDevice {
     }
 
     unsigned long getEpochTime() {
-        #ifdef NTPTESTSTART
-        return NTPTESTSTART + (millis()/1000);
-        #endif
-        return (lastNtpSync > 0 ? ntpClient.getEpochTime() : 0);
+        // Advance only the last accepted sample, including across a millis() wrap.
+        return ntpTime ? ntpTime + static_cast<uint32_t>((micros64() - lastSyncUs) / 1000000ULL) : 0;
     }
 
     unsigned long getEpochTimeLocal() {
-        #ifdef NTPTESTSTART
-        return (lastNtpSync > 0 ? NTPTESTSTART + (millis()/1000) + getOffset() : 0);
-        #endif
-        return (lastNtpSync > 0 ? ntpClient.getEpochTime() + getOffset() : 0);
+        return ntpTime ? getEpochTime() + getOffset() : 0;
     }
 
     unsigned long getUptime() {
-        return millis() / 1000;
+        return static_cast<unsigned long>(micros64() / 1000000ULL);
     }
 
     byte getWeekDay() {
@@ -450,7 +406,7 @@ class WClock : public WDevice {
     }
 
     bool isClockSynced() {
-        return (lastNtpSync > 0);
+        return ntpTime != 0;
     }
 
     long getOffset() {
@@ -492,8 +448,12 @@ class WClock : public WDevice {
    private:
     THandlerFunction onTimeUpdate;
     TErrorHandlerFunction onError;
-    unsigned long lastTry, lastNtpSync, ntpTime, lastRun;
-    int64_t lastDiff;
+    unsigned long lastRun = 0;
+    uint64_t lastSyncUs = 0;
+    uint32_t ntpTime = 0;
+    int64_t lastDiff = 0;
+    bool ntpRunning = false;
+    bool syncPending = false;
     WProperty* epochTime;
     WProperty* epochTimeLocalFormatted;
     WProperty* validTime;
@@ -677,7 +637,7 @@ class WClock : public WDevice {
         return seconds;
     }
 
-    uint32_t RuleToTime(TimeRule r, int yr) {
+    uint32_t RuleToTime(const TimeRule& r, int yr) {
         TIME_T tm;
         uint32_t t;
         uint8_t m;
@@ -725,17 +685,13 @@ class WClock : public WDevice {
         page->print(offset->getInteger());
         htmlTableRowEnd(page);
 
-        page->print(F("<tr><th scope='row'>Last-NTP-Sync Try:</th><td>"));
-        if (lastTry){
-            page->format("%lu Seconds ago", (millis()-lastTry)/1000);
-        } else {
-            page->print(F("Never"));
-        }        
+        htmlTableRowTitle(page, F("NTP client:"));
+        page->print(ntpRunning ? F("Running") : F("Waiting for Wi-Fi"));
         htmlTableRowEnd(page);
 
         htmlTableRowTitle(page, F("Last-NTP-Sync with Success:"));
-        if (lastNtpSync){
-            page->format("%lu Seconds ago", (millis()-lastNtpSync)/1000);
+        if (ntpTime) {
+            page->format("%lu Seconds ago", static_cast<unsigned long>((micros64() - lastSyncUs) / 1000000ULL));
         } else {
             page->print(F("Never"));
         }

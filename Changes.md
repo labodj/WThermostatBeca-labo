@@ -1,5 +1,12 @@
 # Changelog
 
+## Version 1.27.7
+
+* Keep the previous settings snapshot during flash writes. The first changed save migrates existing settings automatically.
+* Recover from wireless outages, rejected MQTT credentials, short network writes and an unresponsive thermostat MCU. Serve schedules after the MCU has supplied them.
+* Synchronize time in the background and retain the last valid time for up to 48 hours offline.
+* Build Home Assistant discovery directly in the MQTT buffer. Retry incomplete payloads and return HTTP 503 when a complete schedule response is unavailable.
+
 ## Version 1.23-fas
 
 * Support for static IP-Addresses - thanks to @N-b-dy

@@ -44,11 +44,16 @@ struct Probe{
 '''
     if "String discoveryId(" in text:
         source += method(BECA, "discoveryId")
-    source += method(BECA, "escapedForDiscovery") + method(BECA, "sendMqttHassAutodiscover")
+    source += method(BECA, "writeDiscoveryTemplate") + method(BECA, "sendMqttHassAutodiscover")
     source += r'''
 };
 int main(){
     Probe p;
+    WStringStream tiny(3);
+    assert(!p.writeDiscoveryTemplate(tiny,PSTR("%s"),{"1234"})&&tiny.overflowed());
+    tiny.flush();assert(!p.writeDiscoveryTemplate(tiny,PSTR("%s"),{}));
+    tiny.flush();assert(!p.writeDiscoveryTemplate(tiny,PSTR("x"),{"unused"}));
+    tiny.flush();assert(!p.writeDiscoveryTemplate(tiny,PSTR("%s"),{nullptr}));
     for(int model=0;model<2;++model)for(double precision:{0.1,0.5,1.0})for(bool floor:{false,true})for(bool online:{false,true}){
         p.model=model;p.precision.number=precision;p.floor.flag=floor;p.complete=online;
         assert(p.sendMqttHassAutodiscover(false));++p.net.scenario;
@@ -139,13 +144,13 @@ struct WDevice{
 struct Log{template<class...T>void notice(T...){}template<class...T>void trace(T...){}template<class...T>void warning(T...){}};
 struct Ip{String toString(){return "192.0.2.1";}};
 struct Client{
-    bool live=false,subscribeOk=true,commandsOk=true;unsigned connects=0;std::vector<std::string>subscriptions;
+    bool live=false,subscribeOk=true,commandsOk=true,metadataOk=true;unsigned connects=0;std::vector<std::string>subscriptions;
     bool connected(){return live;}void setServer(const char*,int){}
     template<class...T>bool connect(T...){++connects;live=true;return true;}
     bool subscribe(const char*topic){subscriptions.emplace_back(topic);if(strstr(topic,"/cmnd/"))return commandsOk;return strcmp(topic,"homeassistant/status")||subscribeOk;}
     bool subscribeConfirmed(const char*topic){return subscribe(topic);}
     void unsubscribe(const char*){}void disconnect(){live=false;}void abort(){live=false;}int state(){return 0;}
-    bool publish(const char*,const char*,bool=false){return true;}
+    bool publish(const char* topic,const char*,bool=false){return strncmp(topic,"devices/",8)!=0 || metadataOk;}
 };
 struct Probe{
     Client client;Client*mqttClient=&client;Log log;Log*wlog=&log;WDevice one,two;WDevice*firstDevice=&one;
@@ -192,6 +197,9 @@ int main(){
     char embedded[]={'o','n',0,'i','n','e',0};p.mqttCallback(birth,embedded,6);p.mqttCallback(birth,online,5);
     assert(!p.hassDiscoveryPending);
     p.enabled=false;p.mqttCallback(birth,online,6);assert(!p.hassDiscoveryPending);
+    Probe metadata;metadata.client.metadataOk=false;
+    assert(!metadata.mqttReconnect()&&!metadata.client.live&&metadata.client.subscriptions.empty());
+    metadata.client.metadataOk=true;assert(metadata.mqttReconnect()&&metadata.client.live);
     Probe disabled;disabled.enabled=false;assert(disabled.mqttReconnect());
     assert(!disabled.hassDiscoveryPending&&std::find(disabled.client.subscriptions.begin(),disabled.client.subscriptions.end(),"homeassistant/status")==disabled.client.subscriptions.end());
     Probe commandsDenied;commandsDenied.client.commandsOk=false;

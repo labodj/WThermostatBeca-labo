@@ -28,6 +28,7 @@ using PGM_P = const char*;
 #define FPSTR(s) F(s)
 inline unsigned long testMillis = 0;
 inline unsigned long millis() { return testMillis; }
+inline uint64_t micros64() { return static_cast<uint64_t>(testMillis) * 1000; }
 inline void yield() { ++testMillis; }
 inline void delay(unsigned long value) { testMillis += value; }
 template<class T, class L, class H> T constrain(T value,L low,H high) { return std::min<T>(high,std::max<T>(low,value)); }
@@ -58,7 +59,7 @@ public:
     void toLowerCase(){std::transform(begin(),end(),begin(),[](unsigned char c){return std::tolower(c);});}
     void trim(){while(size()&&isspace(back()))pop_back();while(size()&&isspace(front()))erase(0,1);}
     void replace(const char* oldValue,const char* newValue){size_t p=0;while((p=find(oldValue,p))!=npos){std::string::replace(p,strlen(oldValue),newValue);p+=strlen(newValue);}}
-    void concat(String value){append(value);}
+    bool concat(const String& value){append(value);return true;}
 };
 inline String operator+(const String& a,char b){String r=a;r.push_back(b);return r;}
 inline String operator+(char a,const String& b){String r(a);r+=b;return r;}

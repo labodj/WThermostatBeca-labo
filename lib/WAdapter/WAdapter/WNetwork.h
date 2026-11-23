@@ -3,6 +3,7 @@
 
 #define SSE_MAX_QUEUED_MESSAGES 4
 
+#include <optional>
 #include <utility>
 #include <Arduino.h>
 #include <WiFiClient.h>
@@ -236,7 +237,7 @@ public:
 						wlog->notice(F("WiFi: Station disconnected (count: %d)"), this->connectFailCounter);
 #ifndef MINIMAL
 						this->disconnectMqtt();
-						this->lastMqttConnect = 0;
+						this->mqttRetryInterval = 0;
 #endif
 					}
 				});
@@ -251,7 +252,7 @@ public:
 	bool loop(unsigned long now) {
 		
 #ifdef DEBUG
-		if (this->lastLoopLog == 0 || now  > this->lastLoopLog + 2000){
+		if (this->lastLoopLog == 0 || now - this->lastLoopLog >= 2000){
 			if (WiFi.status() != WL_CONNECTED) wlog->trace(F("WiFi: loop, wifiStatus: %d, modeRunning: %d, modeDesired: %d, now: %d"),
 			WiFi.status(), wifiModeRunning, wifiModeDesired, now);
 			this->lastLoopLog=now;
@@ -266,7 +267,7 @@ public:
 				wlog->warning(F("WiFi: deactivating softApMode"));
 #ifndef MINIMAL
 				this->disconnectMqtt();
-				this->lastMqttConnect = 0;
+				this->mqttRetryInterval = 0;
 #endif
 				WiFi.softAPdisconnect();
 				lastWifiConnect=0;
@@ -278,21 +279,24 @@ public:
 				WiFi.disconnect();
 			}
 
-			if (wifiModeDesired == wnWifiMode::WIFIMODE_FALLBACK || wifiModeDesired == wnWifiMode::WIFIMODE_AP){
+			if ((wifiModeDesired == wnWifiMode::WIFIMODE_FALLBACK || wifiModeDesired == wnWifiMode::WIFIMODE_AP) &&
+                (!configApRetryPending || now - apStartedAt >= 20000UL)) {
 				wlog->trace(F("Starting AP Mode"));
 				wifiModeRunning = wifiModeDesired;
 				// even if currently disconnected - stop trying to connect
 				WiFi.disconnect();
 				//Create own AP
-				this->apStartedAt=millis();
+				this->apStartedAt=now;
 				String apSsid = getClientName(false);
 				wlog->notice(F("Start AccessPoint for configuration. SSID '%s'"), apSsid.c_str());
-				dnsApServer = new DNSServer();
-				WiFi.mode(WIFI_AP);
-                WiFi.softAPConfig(IPAddress(192,168,4,1), IPAddress(192,168,4,1), IPAddress(255,255,255,0));
-				WiFi.softAP(apSsid.c_str(), CONFIG_PASSWORD);
-				dnsApServer->setErrorReplyCode(DNSReplyCode::NoError);
-				dnsApServer->start(53, "*", WiFi.softAPIP());
+                const IPAddress ip(192,168,4,1);
+                configApRetryPending = !WiFi.mode(WIFI_AP) || !WiFi.softAPConfig(ip, ip, IPAddress(255,255,255,0)) ||
+                    !WiFi.softAP(apSsid.c_str(), CONFIG_PASSWORD);
+                if (configApRetryPending) {
+                    WiFi.softAPdisconnect(true);
+                    wifiModeRunning = wnWifiMode::WIFIMODE_UNSET;
+                    wlog->warning(F("WiFi: configuration AP failed, retry in 20 seconds"));
+                } else startApDns();
 			}
 
 
@@ -301,6 +305,7 @@ public:
 				wlog->trace(F("Starting Station Mode"));
 				logHeap(PSTR("StationMode"));
 				wifiModeRunning = wifiModeDesired;
+                configApRetryPending = false;
 				lastWifiConnect = 0;
                 wifiOfflineSince = gatewayLastSeen = now;
 			}
@@ -362,19 +367,9 @@ public:
 			}
 			result = ((!isSoftAP()) && (!isUpdateRunning()));
 		}
-		if (!isSoftAP()){
 #ifndef MINIMAL
-			//MQTT connection
-			if (!this->isMqttConnected() && ((lastMqttConnect == 0) || (now - lastMqttConnect > 30000))){
-				mqttReconnect();
-				lastMqttConnect = now;
-			}
-			if ((!isUpdateRunning()) && (this->isMqttConnected())) {
-				mqttClient->loop();
-				serviceHassDiscovery(millis());
-			}
+        serviceMqtt(now);
 #endif
-		}
 
 		//Loop led
 		if (statusLed != nullptr) {
@@ -419,7 +414,7 @@ public:
 		}
 
 		if (WiFi.status() != lastWifiStatus){
-			wlog->notice(F("WiFi: Status changed from %d to %d"), lastWifiConnect, WiFi.status());
+			wlog->notice(F("WiFi: Status changed from %d to %d"), lastWifiStatus, WiFi.status());
 			this->logHeap("WiFi Status");
 			lastWifiStatus = WiFi.status(); 
 			this->notify( (WiFi.status() == wl_status_t::WL_CONNECTED) );
@@ -511,7 +506,7 @@ public:
 	}
 
 	bool publishMqtt(const char* topic, WStringStream* response, bool retained=false) {
-		return publishMqtt(topic, response->c_str(), retained);
+		return !response->overflowed() && publishMqtt(topic, response->c_str(), retained);
 	}
 
 	bool publishMqtt(const char* topic, const char* key, const char* value, const char* key2=nullptr, const char* value2=nullptr, bool retained=false) {
@@ -641,7 +636,9 @@ public:
 
 	void disconnectMqtt() {
 		if (this->mqttClient != nullptr) {
-			this->mqttClient->disconnect();
+			// Closing TCP leaves the retained Offline will to the broker, including
+            // after a short write where another MQTT frame cannot safely be sent.
+            this->mqttClient->abort();
 		}
 	}
 #endif
@@ -740,6 +737,17 @@ public:
         recoveryApActive = false;
     }
 
+    void startApDns() {
+        if (dnsApServer) return;
+        dnsApServer = new (std::nothrow) DNSServer();
+        if (dnsApServer) {
+            dnsApServer->setErrorReplyCode(DNSReplyCode::NoError);
+            if (dnsApServer->start(53, "*", WiFi.softAPIP())) return;
+            deleteDnsApServer();
+        }
+        wlog->warning(F("WiFi: AP DNS unavailable; connect to its IP address"));
+    }
+
     void startRecoveryAp(unsigned long now) {
         if (recoveryApActive) return;
         IPAddress apIp(192,168,4,1);
@@ -762,11 +770,10 @@ public:
             !WiFi.softAP(getClientName(false).c_str(), CONFIG_PASSWORD)) {
             wlog->warning(F("WiFi: recovery AP could not start"));
             WiFi.softAPdisconnect(true);
+            wifiOfflineSince = gatewayLastSeen = now;
             return;
         }
-        dnsApServer = new DNSServer();
-        dnsApServer->setErrorReplyCode(DNSReplyCode::NoError);
-        dnsApServer->start(53, "*", WiFi.softAPIP());
+        startApDns();
         recoveryApActive = true;
         recoveryApStartedAt = now;
         wlog->warning(F("WiFi: recovery AP started; station connection remains enabled"));
@@ -843,20 +850,20 @@ public:
 
     void loadBssid() {
         // Keep all legacy network/application offsets, including minimal firmware, unchanged.
-        EEPROM.begin(EEPROM_SIZE);
-        bssidLocked = EEPROM.read(LEGACY_EEPROM_SIZE - 8) == 0xB5;
-        for (int i = 0; i < 6; ++i) bssid[i] = EEPROM.read(LEGACY_EEPROM_SIZE - 7 + i);
-        EEPROM.end();
+        settingsFlash.begin(EEPROM_SIZE);
+        bssidLocked = settingsFlash.read(LEGACY_EEPROM_SIZE - 8) == 0xB5;
+        for (int i = 0; i < 6; ++i) bssid[i] = settingsFlash.read(LEGACY_EEPROM_SIZE - 7 + i);
+        settingsFlash.end();
     }
 
     bool saveBssid(const uint8_t* address, bool locked, bool staged = false) {
-        if (!staged) EEPROM.begin(EEPROM_SIZE);
-        EEPROM.write(LEGACY_EEPROM_SIZE - 8, locked ? 0xB5 : 0xFF);
-        for (int i = 0; i < 6; ++i) EEPROM.write(LEGACY_EEPROM_SIZE - 7 + i, address[i]);
-        const bool saved = staged || EEPROM.commit();
+        if (!staged) settingsFlash.begin(EEPROM_SIZE);
+        settingsFlash.write(LEGACY_EEPROM_SIZE - 8, locked ? 0xB5 : 0xFF);
+        for (int i = 0; i < 6; ++i) settingsFlash.write(LEGACY_EEPROM_SIZE - 7 + i, address[i]);
+        const bool saved = staged || settingsFlash.commit();
         if (!staged) {
-            if (!saved) EEPROM.begin(EEPROM_SIZE);
-            EEPROM.end();
+            if (!saved) settingsFlash.begin(EEPROM_SIZE);
+            settingsFlash.end();
         }
         return saved;
     }
@@ -934,15 +941,9 @@ public:
 	}
 
 	WStringStream* getMQTTResponseStream() {
-		if (responseStream == nullptr) {
-			responseStream = new WStringStream(SIZE_MQTT_PACKET);
-		}
-		if (responseStream == nullptr){
-			wlog->error(F("getMQTTResponseStream no space!"));
-		} else {
-			responseStream->flush();
-		}
-		return responseStream;
+        if (responseStream) responseStream->flush();
+        else responseStream.emplace(SIZE_MQTT_PACKET);
+        return &*responseStream;
 	}
 
 	void setDesiredModeAp(){
@@ -1315,6 +1316,7 @@ private:
 	WProperty *supportingMqttSingleValues;
 	WProperty *mqttBaseTopic;
     WNetworkStrings networkStrings;
+    std::optional<WStringStream> responseStream;
     WProperty *staticIpEnabled;
     WProperty *staticIp;
     WProperty *subnetMask;
@@ -1333,6 +1335,7 @@ private:
 #ifndef MINIMAL
 	WAdapterMqtt *mqttClient;
 	unsigned long lastMqttConnect;
+    unsigned long mqttRetryInterval = 0;
     unsigned long hassDiscoveryRequestedAt = 0;
     bool hassDiscoveryPending = false;
     bool hassStatePending = false;
@@ -1347,8 +1350,6 @@ private:
     String extendedWifiPassword;
 	WProperty *idx;
 	unsigned long lastWifiConnect;
-	WStringStream* responseStream = nullptr;
-	WStringStream* responseStreamWeb = nullptr;
 	WLed *statusLed;
 	int statusLedPin;
 	WSettings *settings;
@@ -1357,6 +1358,7 @@ private:
 	bool networkLogActive;
 	int connectFailCounter;
 	unsigned long apStartedAt;
+    bool configApRetryPending = false;
 	unsigned long lastLoopLog;
 
 	wnWifiMode_t wifiModeDesired;
@@ -1389,7 +1391,7 @@ private:
 				device->toJsonValues(&json, MQTT);
 				json.endObject();
 								
-				if (!publishMqtt(topic.c_str(), response->c_str(), device->isMqttRetain())) {
+				if (response->overflowed() || !publishMqtt(topic.c_str(), response->c_str(), device->isMqttRetain())) {
 					device->lastStateNotify = 0;
 					return;
 				}
@@ -1486,6 +1488,21 @@ private:
 		}
 	}
 
+    void serviceMqtt(unsigned long now) {
+        if (!mqttClient || !isWifiConnected()) return;
+        if (!isMqttConnected()) {
+            if (now - lastMqttConnect < mqttRetryInterval) return;
+            const bool ready = mqttReconnect();
+            const int reason = mqttClient->state();
+            mqttRetryInterval = (reason == MQTT_CONNECT_BAD_CREDENTIALS || reason == MQTT_CONNECT_UNAUTHORIZED)
+                ? 300000UL : 30000UL;
+            lastMqttConnect = millis();
+            if (!ready) return;
+        }
+        mqttClient->loop();
+        serviceHassDiscovery(millis());
+    }
+
 	bool mqttReconnect() {
 		if (this->isSupportingMqtt() && this->isWifiConnected() && this->mqttClient != nullptr
 			&& (!mqttClient->connected())
@@ -1498,9 +1515,12 @@ private:
 			
 			// Attempt to connect
 			this->mqttClient->setServer(getMqttServer(), String(getMqttPort()).toInt());
+            const char* user = getMqttUser();
+            const char* password = getMqttPassword();
+            const bool useCredentials = *user || *password;
 			if (mqttClient->connect(getClientName(true).c_str(),
-					getMqttUser(), //(mqttUser != "" ? mqttUser.c_str() : NULL),
-					getMqttPassword(),
+					useCredentials ? user : nullptr,
+                    useCredentials ? password : nullptr,
 					((String)getMqttTopic()+"/"+MQTT_TELE+"/LWT").c_str(), 2, true, // willTopic, WillQos, willRetain
 					"Offline", true// willMessage, cleanSession
 					)) { //(mqttPassword != "" ? mqttPassword.c_str() : NULL))) {
@@ -1508,8 +1528,6 @@ private:
 				logHeap(PSTR("MQTT Connected"));
 
 				//Send device structure and status
-				mqttClient->subscribe("devices/#");
-				logHeap(PSTR("subscribed"));
 
 				WDevice *device = this->firstDevice;
 				while (device != nullptr) {
@@ -1522,10 +1540,12 @@ private:
 					json.propertyString("ip", getDeviceIp().toString().c_str());
 					json.propertyString("topic", ((String)getMqttTopic()+"/"+MQTT_STAT+"/things/"+device->getId()).c_str());
 					json.endObject();
-					mqttClient->publish(topic.c_str(), response->c_str());
+					if (response->overflowed() || !mqttClient->publish(topic.c_str(), response->c_str())) {
+                        mqttClient->abort();
+                        return false;
+                    }
 					device = device->next;
 				}
-				mqttClient->unsubscribe("devices/#");
 				logHeap(PSTR("devices"));
 				//Subscribe to device specific topic
 				String subscribeTopic=String(String(getMqttTopic()) + "/" + String(MQTT_CMND) + "/#");
@@ -1958,7 +1978,7 @@ private:
             htmlTableRowEnd(page);
 			
 			htmlTableRowTitle(page, F("Uptime:"));
-			unsigned long secs=millis()/1000;
+			unsigned long secs = static_cast<unsigned long>(micros64() / 1000000ULL);
 			unsigned int days = secs / (60UL * 60 * 24);
 			secs -= days * (60UL * 60 * 24);
 			unsigned int hours = secs / (60UL * 60);
@@ -2326,7 +2346,7 @@ private:
 								getSsid(), isSupportingMqtt(), getMqttServer(), getMqttPort(), isSupportingWebThing());
 		}
 
-		EEPROM.end();
+		settingsFlash.end();
         loadBssid();
         extendedWifiPassword = WWifiPassword::load(getSsid(), settings->getString(PROP_PASSWORD));
 		return settingsStored;
