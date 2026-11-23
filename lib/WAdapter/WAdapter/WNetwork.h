@@ -661,19 +661,19 @@ public:
 	}
 
 	bool isStaticIpEnabled() {
-		return this->staticIpEnabled->getBoolean();
+		return (activeNetworkFlags & NETBITS1_STATIC_IP) != 0;
 	}
 
 	bool isSupportingMqtt() {
-		return this->supportingMqtt->getBoolean();
+		return (activeNetworkFlags & NETBITS1_MQTT) != 0;
 	}
 
 	bool isSupportingMqttHASS() {
-		return this->supportingMqttHASS->getBoolean();
+		return (activeNetworkFlags & NETBITS1_HASS) != 0;
 	}
 
 	bool isSupportingApFallback() {
-		return this->supportingApFallback->getBoolean();
+		return (activeNetworkFlags & NETBITS1_APFALLBACK) != 0;
 	}
 
     bool isAuthenticationRequired() {
@@ -681,7 +681,7 @@ public:
     }
 
 	bool isSupportingMqttSingleValues() {
-		return this->supportingMqttSingleValues->getBoolean();
+		return (activeNetworkFlags & NETBITS1_MQTTSINGLEVALUES) != 0;
 	}
 
 	const char* getIdx() {
@@ -698,7 +698,7 @@ public:
             unsigned migrated = flags | NETBITS1_RECOVERY_MIGRATED | NETBITS1_APFALLBACK;
             if (!strlen(getPassword())) migrated |= NETBITS1_AUTH_DISABLED;
             settings->setByte(PROP_NETBITS1, static_cast<byte>(migrated));
-            supportingApFallback->setBoolean(true);
+            activeNetworkFlags |= NETBITS1_APFALLBACK;
         }
     }
 
@@ -1084,8 +1084,7 @@ public:
         if (isPut && !authorize(request, true)) return;
 
 		String uri = request->url();
-		//strip last /
-		if (uri.substring(uri.length() - 1).c_str()[0]=='/') uri[uri.length() - 1]='\0';
+        if (uri.endsWith("/")) uri.remove(uri.length() - 1);
 
 		if (!uri.startsWith(URI_THINGS)){
 			handleUnknown(request); return;
@@ -1310,15 +1309,10 @@ private:
 	String applicationName;
 	String firmwareVersion;
 	const __FlashStringHelper* firmwareUpdateError;
-	WProperty *netBits1;
-	WProperty *supportingMqtt;
-	WProperty *supportingMqttHASS;
-	WProperty *supportingApFallback;
-	WProperty *supportingMqttSingleValues;
+	byte activeNetworkFlags = 0;
 	WProperty *mqttBaseTopic;
     WNetworkStrings networkStrings;
     std::optional<WStringStream> responseStream;
-    WProperty *staticIpEnabled;
     WProperty *staticIp;
     WProperty *subnetMask;
     WProperty *gateway;
@@ -1425,6 +1419,7 @@ private:
             return;
         }
 		String payloadS=String(payload);
+        if (payloadS.length() != length) return;
 		wlog->trace(F("Received MQTT callback: '%s'->'%s'"), ptopic, payload, strlen(ptopic), ptopicS.length());
 		if (!ptopicS.startsWith(String(getMqttTopic()) + "/")){
 			wlog->notice(F("Ignoring, starts not with our topic '%s'"), getMqttTopic());
@@ -1467,17 +1462,15 @@ private:
 								//Try to find property with that topic and set single value
 								WProperty* property = device->getPropertyById(topic.c_str());
 								if ((property != nullptr) && (property->isVisible(MQTT))) {
-									//Set Property
-									wlog->notice(F("Set property '%s' for device %s"), property->getId(), device->getId(), payloadS.c_str());
-									if (!property->parse(payloadS)) {
-										wlog->warning(F("Property not updated."));
-									} else {
-										wlog->trace(F("Property updated."));
-										// set to unchanged, because we're sending update now immediately
-										property->setUnChanged();
-									}
-									// answer just with changed value
-									publishMqtt((stat_topic+topic).c_str(), property->toString().c_str(), device->isMqttRetain());
+                                    if (length && !property->parse(payloadS))
+                                        wlog->warning(F("Property not updated."));
+                                    String formatted;
+                                    const char* value = property->mqttValue(formatted);
+                                    if (value && publishMqtt((stat_topic + "properties/" + topic).c_str(), value, device->isMqttRetain())) {
+                                        property->setUnChanged();
+                                        // Older clients listen for direct replies on this shorter topic.
+                                        publishMqtt((stat_topic + topic).c_str(), value, device->isMqttRetain());
+                                    }
 								}
 							}			
 							wlog->notice(F("Sending device State to %sproperties for device %s"), stat_topic.c_str(), device->getName());				
@@ -1493,7 +1486,7 @@ private:
 	}
 
     void serviceMqtt(unsigned long now) {
-        if (!mqttClient || !isWifiConnected()) return;
+        if (restartFlag || !mqttClient || !isWifiConnected()) return;
         if (!isMqttConnected()) {
             if (now - lastMqttConnect < mqttRetryInterval) return;
             const bool ready = mqttReconnect();
@@ -1944,6 +1937,19 @@ private:
 			page->print(" dBm");
 			htmlTableRowEnd(page);
 
+#ifndef MINIMAL
+            htmlTableRowTitle(page, F("MQTT connection:"));
+            if (!isSupportingMqtt()) page->print(F("Disabled"));
+            else if (!*getMqttServer()) page->print(F("Broker not configured"));
+            else if (!isWifiConnected()) page->print(F("Waiting for Wi-Fi"));
+            else if (isMqttConnected()) page->print(F("Connected"));
+            else if (mqttClient && (mqttClient->state() == MQTT_CONNECT_BAD_CREDENTIALS ||
+                                    mqttClient->state() == MQTT_CONNECT_UNAUTHORIZED))
+                page->print(F("Broker rejected login. Check credentials and permissions. Retrying every 5 minutes."));
+            else page->print(F("Disconnected. Retrying automatically."));
+            htmlTableRowEnd(page);
+#endif
+
 			htmlTableRowTitle(page, F("Flash Chip size:"));
 			page->print(ESP.getFlashChipSize());
 			page->print(STR_BYTE);
@@ -2269,7 +2275,7 @@ private:
 			(settingsOld && settingsOld->existsSetting(PROP_IDX) ? settingsOld->getString(PROP_IDX) : this->getClientName(true).c_str()));
 		this->ssid = settings->setString(PROP_SSID, 32, (settingsOld && settingsOld->existsSetting(PROP_SSID) ? settingsOld->getString(PROP_SSID) : ""));
 		settings->setString(PROP_PASSWORD, 32, (settingsOld && settingsOld->existsSetting(PROP_PASSWORD) ? settingsOld->getString(PROP_PASSWORD) : ""));
-		this->netBits1 = settings->setByte(PROP_NETBITS1, (settingsOld && settingsOld->existsSetting(PROP_NETBITS1) ? settingsOld->getByte(PROP_NETBITS1) : (NETBITS1_MQTT | NETBITS1_HASS)));
+		WProperty* netBits1 = settings->setByte(PROP_NETBITS1, (settingsOld && settingsOld->existsSetting(PROP_NETBITS1) ? settingsOld->getByte(PROP_NETBITS1) : (NETBITS1_MQTT | NETBITS1_HASS)));
 		settings->setString(PROP_MQTTSERVER, 32, (settingsOld && settingsOld->existsSetting(PROP_MQTTSERVER) ? settingsOld->getString(PROP_MQTTSERVER) : ""));
 		settings->setString(PROP_MQTTPORT, 5, (settingsOld && settingsOld->existsSetting(PROP_MQTTPORT) ? settingsOld->getString(PROP_MQTTPORT) : "1883"));
 		settings->setString(PROP_MQTTUSER, 16, (settingsOld && settingsOld->existsSetting(PROP_MQTTUSER) ? settingsOld->getString(PROP_MQTTUSER) : ""));
@@ -2284,28 +2290,10 @@ private:
         settings->writesEnabled = networkStrings.loadAndMigrate(legacyStrings, oldStrings);
         if (!settings->writesEnabled) wlog->error(F("Network migration could not preserve full values; settings writes disabled"));
 
-		// Split mqtt setting into bits - so we keep settings storage compatibility
-		if (this->netBits1->getByte() == 0xFF) this->netBits1->setByte(NETBITS1_MQTT | NETBITS1_HASS); // compatibility
-		this->supportingMqtt = new WProperty("supportingMqtt", "supportingMqtt", BOOLEAN);
-		this->supportingMqtt->setBoolean(this->netBits1->getByte() & NETBITS1_MQTT);
-		this->supportingMqtt->setReadOnly(true);
-		this->supportingMqttHASS = new WProperty("supportingMqttHASS", "supportingMqttHASS", BOOLEAN);
-		this->supportingMqttHASS->setBoolean(this->netBits1->getByte() & NETBITS1_HASS);
-		this->supportingMqttHASS->setReadOnly(true);
+        if (netBits1->getByte() == 0xFF) netBits1->setByte(NETBITS1_MQTT | NETBITS1_HASS);
+        // Network services keep their boot configuration until a successful save restarts the ESP.
+        activeNetworkFlags = netBits1->getByte();
 
-		this->supportingApFallback= new WProperty("supportingApFallback", "supportingApFallback", BOOLEAN);
-		this->supportingApFallback->setBoolean(this->netBits1->getByte() & NETBITS1_APFALLBACK);
-		this->supportingApFallback->setReadOnly(true);
-
-		this->supportingMqttSingleValues= new WProperty("supportingMqttSingleValues", "supportingMqttSingleValues", BOOLEAN);
-		this->supportingMqttSingleValues->setBoolean(this->netBits1->getByte() & NETBITS1_MQTTSINGLEVALUES);
-		this->supportingMqttSingleValues->setReadOnly(true);
-
-
-        // Static IP
-        this->staticIpEnabled = new WProperty("staticIpEnabled", "staticIpEnabled", BOOLEAN);
-        this->staticIpEnabled->setBoolean(this->netBits1->getByte() & NETBITS1_STATIC_IP);
-        this->staticIpEnabled->setReadOnly(true);
         this->staticIp = settings->setString(PROP_STATICIP, 15, (settingsOld && settingsOld->existsSetting(PROP_STATICIP) ? settingsOld->getString(PROP_STATICIP) : ""));
         this->subnetMask = settings->setString(PROP_SUBNETMASK, 15, (settingsOld && settingsOld->existsSetting(PROP_SUBNETMASK) ? settingsOld->getString(PROP_SUBNETMASK) : "255.255.255.0"));
         this->gateway = settings->setString(PROP_GATEWAY, 15, (settingsOld && settingsOld->existsSetting(PROP_GATEWAY) ? settingsOld->getString(PROP_GATEWAY) : ""));
@@ -2372,10 +2360,10 @@ private:
 				WProperty* property = device->firstProperty;
 				while (property != nullptr) {
 					if (property->isVisible(MQTT) && property->isChanged() && !property->isNull()) {
-						String stat_topic = String(getMqttTopic()) + String("/") + String(MQTT_STAT) + String("/things/") + String(device->getId()) + String("/properties/") + String(property->getId());
-						//wlog->verbose(F("sending changed property '%s' with value '%s' for device '%s' to topic '%s'"),
-						//	property->getId(), property->toString().c_str(), device->getId(), stat_topic.c_str());
-						if (publishMqtt(stat_topic.c_str(), property->toString().c_str(), device->isMqttRetain()))
+                        String formatted;
+                        const char* value = property->mqttValue(formatted);
+                        const String stat_topic = String(getMqttTopic()) + "/" + MQTT_STAT + "/things/" + device->getId() + "/properties/" + property->getId();
+						if (value && publishMqtt(stat_topic.c_str(), value, device->isMqttRetain()))
                             property->setUnChanged();
 
 						// only one per loop() -> bye

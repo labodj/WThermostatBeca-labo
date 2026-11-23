@@ -78,6 +78,12 @@ class UiRenderingTests(unittest.TestCase):
         application = (ROOT / "WThermostat/WThermostat.cpp").read_text()
         self.assertRegex(application, r'#define\s+APPLICATION\s+"WThermostat"')
 
+    def test_info_reports_mqtt_connection_and_login_failure(self):
+        self.assertIn("MQTT connection:", self.pages["/info"])
+        self.assertIn(">Connected<", self.pages["/info"])
+        self.assertIn("Broker rejected login", self.pages["/info-login-rejected"])
+        self.assertIn("5 minutes", self.pages["/info-login-rejected"])
+
     @classmethod
     def setUpClass(cls):
         cls.pages = render_pages()

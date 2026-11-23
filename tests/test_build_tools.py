@@ -9,6 +9,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class BuildToolsTests(unittest.TestCase):
+    def test_serial_decoder_recovers_after_incomplete_lines(self):
+        from arduino.espminiterm import ESPStackDecoder
+
+        decoder = ESPStackDecoder()
+        for _ in range(32):
+            chunk = "x" * 1024
+            self.assertEqual(chunk, decoder.rx(chunk))
+            self.assertLessEqual(len(decoder.rxbuf), 4096)
+        self.assertEqual("\nException ():\n", decoder.rx("\nException ():\n"))
+        self.assertEqual("Exception (", decoder.rx("Exception ("))
+        self.assertIn("LoadProhibitedCause", decoder.rx("28):\r\n"))
+        self.assertEqual("", decoder.rxbuf)
+
     def test_firmware_artifact_names_and_debug_symbols(self):
         class Environment:
             def subst(self, value):

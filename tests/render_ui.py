@@ -79,7 +79,11 @@ struct WDevice{
     void printInfoPage(WCheckedPrint*p){if(info)info(p);}
     void printConfigPage(AsyncWebServerRequest*r,WCheckedPrint*p){if(config)config(r,p);}
 };
+constexpr int MQTT_CONNECT_BAD_CREDENTIALS=4, MQTT_CONNECT_UNAUTHORIZED=5;
 struct Net{
+    struct Mqtt { int result=0; int state(){return result;} } client;
+    Mqtt* mqttClient=&client;
+    bool isMqttConnected(){return client.state()==0;}
     Log logger;Log*wlog=&logger;WDevice*firstDevice=nullptr;
     String applicationName="WThermostatBeca",firmwareVersion=PREVIEW_VERSION,csrfToken="preview-token",address;
     bool debug=false,enabled=true,staticEnabled=false,bssidLocked=false;const char*restartFlag=nullptr;
@@ -182,6 +186,7 @@ int main(){
     {AsyncWebServerRequest r;net.handleHttpDevicePage(&r,&therm,beca.reinitPage);emit("/thermostat_reinit",r);assert(beca.resyncs==0);}
     {AsyncWebServerRequest r;net.handleHttpFirmwareUpdate(&r);emit("/firmware",r);}
     {AsyncWebServerRequest r;net.handleHttpInfo(&r);emit("/info",r);}
+    {AsyncWebServerRequest r;net.client.result=5;net.handleHttpInfo(&r);emit("/info-login-rejected",r);net.client.result=0;}
     {AsyncWebServerRequest r;beca.model=1;net.handleHttpInfo(&r);emit("/info-bac",r);}
 }
 '''

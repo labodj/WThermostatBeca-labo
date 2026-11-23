@@ -55,6 +55,7 @@ public:
     bool startsWith(String value) const { return find(value)==0; }
     String substring(size_t a,size_t b) const { return a<size()?substr(a,b-a):""; }
     String substring(size_t a) const { return a<size()?substr(a):""; }
+    void remove(size_t index){erase(index);}
     int indexOf(const char* value) const { auto p=find(value);return p==npos?-1:static_cast<int>(p); }
     void toLowerCase(){std::transform(begin(),end(),begin(),[](unsigned char c){return std::tolower(c);});}
     void trim(){while(size()&&isspace(back()))pop_back();while(size()&&isspace(front()))erase(0,1);}

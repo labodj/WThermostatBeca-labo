@@ -66,6 +66,34 @@ class MqttDeliveryTests(unittest.TestCase):
         )
         self.compile_run(source, "mqtt_logging")
 
+    def test_packet_buffer_failure_can_retry_without_sending(self):
+        self.compile_run(r'''
+#include "lib/WAdapter/WAdapter/WAdapterMqtt.h"
+static bool lowMemory = true;
+static unsigned attempts = 0;
+void* operator new[](size_t size, const std::nothrow_t&) noexcept {
+    if (size == 513) {
+        ++attempts;
+        if (lowMemory) return nullptr;
+    }
+    return ::operator new[](size);
+}
+int main() {
+    Client client;
+    WAdapterMqtt mqtt(false, client, 512);
+    mqtt.disconnect();
+    assert(attempts == 0 && client.sent.empty());
+    assert(!mqtt.connect("room") && attempts == 1 && !client.connected());
+    assert(!mqtt.publish("room/state", "unavailable") && client.sent.empty());
+    lowMemory = false;
+    client.data = {0x20, 2, 0, 0};
+    assert(mqtt.connect("room") && attempts == 2);
+    mqtt.disconnect();
+    client.pos = 0;
+    assert(mqtt.connect("room") && attempts == 2);
+}
+''', "mqtt_packet_allocation")
+
     def test_mqtt_eof_is_not_a_valid_ff_byte(self):
         source = r'''
 #include "Arduino.h"
@@ -100,21 +128,30 @@ static_assert(!std::is_copy_constructible<WSettings>::value&&!std::is_copy_assig
 static_assert(!std::is_copy_constructible<WAdapterMqtt>::value&&!std::is_copy_assignable<WAdapterMqtt>::value);
 int main(){
  Client client;client.data={0x20,2,0,0};WAdapterMqtt mqtt(false,client,64);assert(mqtt.connect("test"));client.sent.clear();
- for(const char*topic:{static_cast<const char*>(nullptr),std::string(58,'x').c_str()}){
+ const std::string oversizedTopic(58,'x');
+ for(const char*topic:{static_cast<const char*>(nullptr),"",oversizedTopic.c_str()}){
   assert(!mqtt.beginPublish(topic,0,false));assert(client.sent.empty());
+  assert(!mqtt.publish(topic,"value")&&!mqtt.unsubscribe(topic)&&client.sent.empty());
  }
+ assert(!mqtt.publish("x",nullptr)&&!mqtt.publish("x",nullptr,1,true)&&client.sent.empty());
+ assert(mqtt.publish("x",nullptr,0,true));
+ assert((client.sent==std::vector<uint8_t>{0x31,3,0,1,'x'}));
+ client.sent.clear();
  assert(!mqtt.beginPublish("x",UINT_MAX,false)&&client.sent.empty());
  assert(!mqtt.beginPublish("x",65533,false)&&client.sent.empty());
  assert(mqtt.beginPublish("x",65532,false));
  assert((client.sent==std::vector<uint8_t>{0x30,0xff,0xff,0x03,0,1,'x'}));
  client.sent.clear();assert(mqtt.beginPublish("x",1,true));assert(mqtt.write(uint8_t('a'))==1);
  assert((client.sent==std::vector<uint8_t>{0x31,4,0,1,'x','a'}));
+ WProperty sensor("temperature","Temperature",DOUBLE);
+ String formatted;
+ assert(sensor.mqttValue(formatted)==nullptr);
+ sensor.setOnValueRequest([](WProperty* current){current->setDouble(0);});
+ assert(!strcmp(sensor.mqttValue(formatted),String(0.0).c_str()));
  WSettingItem item;assert(item.value==nullptr&&item.address==0&&item.next==nullptr);
  puts("PASS ownership traits and streaming MQTT capacity/16-bit length limits");
 }
 '''
-        # Keep the oversized topic alive for the entire loop.
-        source = source.replace('for(const char*topic:', "const std::string longTopic(58,'x');for(const char*topic:").replace("std::string(58,'x').c_str()", 'longTopic.c_str()')
         self.compile_run(source, 'mqtt_streaming')
 
     def test_state_publish_failure_retains_retry_and_success_marks_delivery(self):

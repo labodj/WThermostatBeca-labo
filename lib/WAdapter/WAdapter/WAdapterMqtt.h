@@ -3,6 +3,7 @@
 
 #include "WArguments.h"
 #include <utility>
+#include <new>
 #include <Arduino.h>
 #include "IPAddress.h"
 #include "Client.h"
@@ -87,8 +88,6 @@ public:
 		setClient(client);
 		this->stream = NULL;
 		this->maxPacketSize = maxPacketSize;
-		//uint8_t buffer[MQTT_MAX_PACKET_SIZE];
-		this->buffer = new uint8_t[maxPacketSize + 1];
         lastOutActivity = lastInActivity = 0;
         pingOutstanding = false;
 	}
@@ -153,6 +152,10 @@ public:
             if (maxPacketSize < MQTT_MAX_HEADER_SIZE + 12 || maxPacketSize > UINT16_MAX - MQTT_MAX_HEADER_SIZE ||
                 !id || (willTopic && !willMessage)) {
                 return false;
+            }
+            if (!buffer) {
+                buffer = new (std::nothrow) uint8_t[maxPacketSize + 1];
+                if (!buffer) return false;
             }
 			int result = 0;
 
@@ -272,9 +275,10 @@ public:
 	}
 
 	void disconnect() {
-		buffer[0] = MQTTDISCONNECT;
-		buffer[1] = 0;
-		_client->write(buffer, 2);
+        if (connected()) {
+            const uint8_t packet[] = {MQTTDISCONNECT, 0};
+            _client->write(packet, sizeof(packet));
+        }
 		_state = MQTT_DISCONNECTED;
 		_client->flush();
 		_client->stop();
@@ -282,11 +286,11 @@ public:
 	}
 
 	bool publish(const char* topic, const char* payload) {
-		return publish(topic, payload, strlen(payload), false);
+		return publish(topic, payload, false);
 	}
 
 	bool publish(const char* topic, const char* payload, bool retained) {
-		return publish(topic, payload, strlen(payload), retained);
+		return payload && publish(topic, payload, strlen(payload), retained);
 	}
 
 	bool publish(const char* topic, const char* payload, unsigned int plength, bool retained) {
@@ -294,6 +298,7 @@ public:
     }
 
     bool publish(WMqttTopic topic, const char* payload, unsigned int plength, bool retained) {
+        if (!topic.value || !*topic.value || (!payload && plength)) return false;
 		if (connected()) {
 			const size_t topicLength = strlen(topic.value);
 			const size_t capacity = getMaxPacketSize();
@@ -370,7 +375,7 @@ public:
 
 	bool beginPublish(const char *topic, unsigned int plength, bool retained) {
 		if (connected()) {
-			if (topic == nullptr) return false;
+			if (!topic || !*topic) return false;
 			const size_t topicLength = strlen(topic);
 			const size_t capacity = getMaxPacketSize();
 			if (capacity < MQTT_MAX_HEADER_SIZE + 2 ||
@@ -456,7 +461,7 @@ public:
     }
 
 	bool unsubscribe(const char *topic) {
-		if (this->getMaxPacketSize() < 9 + strlen(topic)) {
+		if (!topic || !*topic || this->getMaxPacketSize() < 9 + strlen(topic)) {
 			// Too long
 			return false;
 		}
@@ -599,7 +604,7 @@ private:
 	bool debug;
 	Client *_client;
 	int maxPacketSize;
-	uint8_t *buffer; //[MQTT_MAX_PACKET_SIZE];
+	uint8_t *buffer = nullptr;
 	uint16_t nextMsgId = 0;
 	unsigned long lastOutActivity;
 	unsigned long lastInActivity;
@@ -744,21 +749,11 @@ private:
     }
 
 	uint16_t writeString(const char *string, uint8_t *buf, uint16_t pos) {
-		//const char *idp = string;
-		uint16_t i = 0;
-		pos += 2;
-		const size_t stringLength = strlen(string);
-		for (size_t b = 0; b < stringLength; b++) {
-			buf[pos++] = string[b];
-			i++;
-		}
-		/*while (*idp) {
-			buf[pos++] = *idp++;
-			i++;
-		}*/
-		buf[pos - i - 2] = (i >> 8);
-		buf[pos - i - 1] = (i & 0xFF);
-		return pos;
+        const size_t length = strlen(string);
+        buf[pos++] = length >> 8;
+        buf[pos++] = length & 0xff;
+        memmove(buf + pos, string, length);
+        return pos + length;
 	}
 
 	// Build up the header ready to send

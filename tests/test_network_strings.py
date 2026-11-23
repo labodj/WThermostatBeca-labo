@@ -53,18 +53,18 @@ int main(){
 ''' + constants + r'''
 struct Probe{
  Print output;WLog logger{0,0,&output};WLog*wlog=&logger;WSettings*settings=nullptr,*settingsOld=nullptr;
- WProperty*idx=nullptr,*ssid=nullptr,*netBits1=nullptr,*mqttBaseTopic=nullptr,*supportingMqtt=nullptr,*supportingMqttHASS=nullptr,
- *supportingApFallback=nullptr,*supportingMqttSingleValues=nullptr,*staticIpEnabled=nullptr,*staticIp=nullptr,*subnetMask=nullptr,*gateway=nullptr,*dns1=nullptr,*dns2=nullptr;
+ WProperty*idx=nullptr,*ssid=nullptr,*mqttBaseTopic=nullptr,*staticIp=nullptr,*subnetMask=nullptr,*gateway=nullptr,*dns1=nullptr,*dns2=nullptr;
+ byte activeNetworkFlags=0;
  WNetworkStrings networkStrings;String extendedWifiPassword;byte bssid[6]{};bool bssidLocked=false;
  Probe(bool expected=true){startAddressReadOffset=startAddressSaveOffset=2;settings=new WSettings(wlog,0xf1,false);
   if(settings->getNetworkSettingsVersion()!=NETWORKSETTINGS_CURRENT||settings->getApplicationSettingsVersion()!=0xf1)settingsOld=new WSettings(wlog,0xf1,true);
   assert(loadSettings()==expected);}
- ~Probe(){delete supportingMqtt;delete supportingMqttHASS;delete supportingApFallback;delete supportingMqttSingleValues;delete staticIpEnabled;delete settingsOld;delete settings;}
+ ~Probe(){delete settingsOld;delete settings;}
  String getClientName(bool){return "default-room";}String getMacAddress(){return "AA:BB:CC:DD:EE:FF";}
  bool isSupportingWebThing(){return true;}
  void deleteSettingsOld(){delete settingsOld;settingsOld=nullptr;}
 '''
-        for name in ['loadSettings', 'getIdx', 'getSsid', 'getPassword', 'getMqttUser', 'getMqttPassword', 'getMqttTopic', 'getMqttServer', 'getMqttPort', 'getStaticIp', 'getSubnetMask', 'getGateway', 'getDns1', 'getDns2', 'isSupportingMqtt', 'isStaticIpEnabled', 'loadBssid']:
+        for name in ['loadSettings', 'getIdx', 'getSsid', 'getPassword', 'getMqttUser', 'getMqttPassword', 'getMqttTopic', 'getMqttServer', 'getMqttPort', 'getStaticIp', 'getSubnetMask', 'getGateway', 'getDns1', 'getDns2', 'isSupportingMqtt', 'isSupportingMqttHASS', 'isSupportingMqttSingleValues', 'isSupportingApFallback', 'isStaticIpEnabled', 'loadBssid']:
             source += method(NETWORK, name) + '\n'
         source += '};\nstruct Beca{Probe*network;\n' + method(BECA, 'discoveryId') + r'''
 };
@@ -80,6 +80,16 @@ int main(){
  EEPROM.bytes.fill(0xff);EEPROM.commitOk=true;
  {Probe p(false);assert(strlen(p.getSsid())==0&&strlen(p.getPassword())==0);}
  legacy();const auto original=EEPROM.bytes;
+ for(unsigned flags=0;flags<128;++flags){
+  EEPROM.bytes=original; EEPROM.bytes[97]=flags; Probe p;
+  assert(p.isSupportingMqtt()==bool(flags&NETBITS1_MQTT));
+  assert(p.isSupportingMqttHASS()==bool(flags&NETBITS1_HASS));
+  assert(p.isSupportingMqttSingleValues()==bool(flags&NETBITS1_MQTTSINGLEVALUES));
+  assert(p.isSupportingApFallback()==bool(flags&NETBITS1_APFALLBACK));
+  assert(p.isStaticIpEnabled()==bool(flags&NETBITS1_STATIC_IP));
+  p.settings->setByte(PROP_NETBITS1,0);assert(p.activeNetworkFlags==flags);
+ }
+ EEPROM.bytes=original;
  {Probe p;assert(p.settings->writesEnabled);
   assert(p.getIdx()==name&&p.getMqttUser()==user&&p.getMqttPassword()==password&&p.getMqttTopic()==topic);
   Beca b{&p};assert(b.discoveryId("_climate")==String(name+"_climate"));

@@ -29,6 +29,7 @@ struct Probe{
     Net net;Net*network=&net;Clock clock;Clock*wClock=&clock;
     bool mcuInitialized=false,receivingDataFromMcu=false,receivedStates[STATE_COMPLETE]{};
     int mcuInitializeState=0;unsigned long lastMcuAttempt=0,lastMcuReceived=0,lastTimeSent=0;
+    int lastMcuAvailability=1;
     byte schedulesDataPoint=0x65;int currentSchedulePeriod=18;unsigned long lastScheduleNotify=1;
     unsigned mcuRetryCount=0;
     bool timeIsRequested=false,timeIsRequestedLocaltime=false,timeIsRequestedSendZeroSecs=false;
@@ -36,7 +37,7 @@ struct Probe{
     float getTemperatureFactor(){return factor;}byte dayOffset=0;byte getSchedulesDayOffset(){return dayOffset;}
     void updateTargetTemperature(){}void updateModeAndAction(){}
 """
-        for name in ["getCommandAsString", "commandCharsToSerial", "queryAllDPs", "startMcuInitialize",
+        for name in ["getCommandAsString", "commandCharsToSerial", "queryAllDPs", "refreshMqttState", "startMcuInitialize",
                      "mcuInitialize", "isDeviceStateComplete", "decodeMcuValue", "targetTemperatureManualModeToMcu",
                      "sendActualTimeToBecaRequested", "sendActualTimeToBeca"]:
             source += method(BECA, name) + "\n"
@@ -50,6 +51,8 @@ int main(){
     testMillis=2000;p.mcuInitialize();assert(Serial.output.size()==7);
     testMillis=4001;p.mcuInitialize();assert(Serial.output.size()==14);
     p.mcuInitializeState=5;p.mcuInitialize();assert(p.mcuInitializeState==6&&Serial.output.size()==21);
+    p.lastScheduleNotify=42;p.refreshMqttState();
+    assert(p.lastMcuAvailability==-1&&!p.lastScheduleNotify&&Serial.output.size()==28);
     p.mcuInitialized=true;p.lastMcuReceived=millis();assert(!p.isDeviceStateComplete());
     for(bool& state:p.receivedStates)state=true;
     assert(p.isDeviceStateComplete());testMillis+=60001;assert(!p.isDeviceStateComplete());
@@ -216,6 +219,7 @@ int main(){
         #include "Arduino.h"
         #include "Stream.h"
         #include "lib/WAdapter/WAdapter/WProperty.h"
+        #include "lib/WAdapter/WAdapter/WHeatingCoolingProperty.h"
         #include "lib/WAdapter/WAdapter/WStringStream.h"
         """
             + const

@@ -63,7 +63,7 @@ void setup() {
             if (network->isWifiConnected()) {
                 becaDevice->reportNetworkToMcu(mcuNetworkMode::MCU_NETWORKMODE_CONNECTEDCLOUD);
                 if (network->isMqttConnected()) {
-                    becaDevice->queryAllDPs();
+                    becaDevice->refreshMqttState();
                 }
             } else {
                 becaDevice->reportNetworkToMcu(mcuNetworkMode::MCU_NETWORKMODE_NOTCONNECTED);

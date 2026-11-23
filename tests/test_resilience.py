@@ -132,7 +132,7 @@ struct Mqtt {
 };
 struct Probe {
     Mqtt mqtt; Mqtt* mqttClient=&mqtt;
-    bool wifi=false, online=false;
+    bool wifi=false, online=false, restartFlag=false;
     unsigned attempts=0;
     unsigned long lastMqttConnect=0, mqttRetryInterval=0;
     bool isWifiConnected(){return wifi;}
@@ -144,7 +144,8 @@ struct Probe {
 };
 int main(){
     Probe p; p.tick(0);assert(!p.attempts);
-    p.wifi=true;p.mqtt.reason=MQTT_CONNECT_BAD_CREDENTIALS;
+    p.wifi=true;p.restartFlag=true;p.tick(0);assert(!p.attempts && !p.mqtt.loops);
+    p.restartFlag=false;p.mqtt.reason=MQTT_CONNECT_BAD_CREDENTIALS;
     p.tick(0);p.tick(299999);assert(p.attempts==1);
     p.mqtt.reason=MQTT_CONNECT_FAILED;
     p.tick(300000);p.tick(329999);assert(p.attempts==2 && !p.online);

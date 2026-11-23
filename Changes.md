@@ -2,6 +2,13 @@
 
 Entries run from newest to oldest. The Labo fork starts at 1.24. Downloadable builds and their original release notes are listed on [GitHub Releases](https://github.com/labodj/WThermostatBeca-labo/releases).
 
+## Version 1.27.9
+
+* Read a single MQTT property with an empty command payload. Direct requests for available values receive both the documented reply and the historical short reply. A sensor that has not supplied a reading no longer publishes a placeholder as its value.
+* Republish controller availability and programs after a broker reconnect, including a reconnect between two device loop iterations. Skip MQTT reconnection while an OTA restart is pending.
+* Allocate the MQTT packet buffer on demand and retry if memory is unavailable. Store the active network options in one byte and reuse existing text values for MQTT replies. Existing settings and schedules remain compatible.
+* Show MQTT connection and login status on the Info page. Accept trailing slashes on WebThings URLs, bound the serial monitor’s pending input and fix a duplicate declaration in the optional heating/cooling header.
+
 ## Version 1.27.8
 
 * Send a consistent date and weekday to the thermostat MCU when UTC and local time fall on different days. Each time update uses a single calendar conversion.

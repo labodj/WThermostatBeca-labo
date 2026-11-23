@@ -69,13 +69,14 @@ The normal recovery address is `192.168.4.1`. An overlapping station subnet sele
 <details>
 <summary>Topics, HTTP endpoints and schedule examples</summary>
 
-Replace `<base>` with the MQTT base topic configured on your thermostat. An empty command payload requests the current value.
+Replace `<base>` with the MQTT base topic configured on your thermostat. An empty command payload requests the current value. A single-property request produces a value reply once the device has a reading for that property.
 
 | Topic below `<base>` | Purpose |
 |---|---|
 | `stat/things/thermostat/properties` | Thermostat state |
 | `cmnd/things/thermostat/properties` | Request state or send a JSON object of writable properties |
-| `cmnd/things/thermostat/properties/<property>` | Change one property |
+| `cmnd/things/thermostat/properties/<property>` | Read one property with an empty payload, or set a writable property |
+| `stat/things/thermostat/properties/<property>` | Single-property value. Direct requests also receive the legacy reply at `stat/things/thermostat/<property>` |
 | `stat/things/thermostat/schedules`, `cmnd/things/thermostat/schedules` | Receive, request or update programs |
 | `tele/LWT`, `tele/mcu` | MQTT connection and controller availability |
 | `tele/log` | Diagnostic messages when enabled |

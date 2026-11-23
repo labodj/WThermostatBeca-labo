@@ -474,6 +474,16 @@ public:
 		return String("");
 	}
 
+    const char* mqttValue(String& formatted) {
+        // Getters may refresh the property on demand. Check availability afterwards.
+        if (getType() == STRING) {
+            const char* text = c_str();
+            return isNull() ? nullptr : text;
+        }
+        formatted = toString();
+        return isNull() || !formatted.length() ? nullptr : formatted.c_str();
+    }
+
 	virtual void toJsonValue(WJson* json, bool onlyValue=false) {
 		const char* memberName = (onlyValue ? nullptr : getId());
 		switch (getType()) {

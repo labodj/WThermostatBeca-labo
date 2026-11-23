@@ -170,6 +170,49 @@ int main(){Probe p;AsyncWebServerRequest first,second;WCheckedPrint*inner=nullpt
 '''
         self.compile_run(source, 'http_header_reentry')
 
+    def test_webthings_optional_trailing_slash(self):
+        source = r'''
+#include "Arduino.h"
+constexpr int HTTP_GET=1, HTTP_PUT=2, WEBTHING=1;
+const char* URI_THINGS="/things", *URI_SEP="/", *URI_PROPERTIES="/properties";
+struct AsyncWebServerRequest {
+    String path; int verb=HTTP_GET, status=0;
+    int method(){return verb;} String url(){return path;} void send(int code){status=code;}
+};
+struct WProperty {
+    WProperty* next=nullptr;
+    bool isVisible(int){return true;} const char* getId(){return "temperature";}
+};
+struct WDevice {
+    WDevice* next=nullptr; WProperty prop; WProperty* firstProperty=&prop;
+    const char* getId(){return "thermostat";}
+};
+struct Probe {
+    WDevice device; WDevice* firstDevice=&device; bool allow=true;
+    bool authorize(AsyncWebServerRequest*r,bool){if(!allow)r->send(401);return allow;}
+    void handleUnknown(AsyncWebServerRequest*r){r->send(404);}
+    void sendDevicesStructure(AsyncWebServerRequest*r){r->send(200);}
+    void sendDeviceStructure(AsyncWebServerRequest*r,WDevice*){r->send(201);}
+    void sendDeviceValues(AsyncWebServerRequest*r,WDevice*){r->send(202);}
+    void getPropertyValue(AsyncWebServerRequest*r,WProperty*){r->send(203);}
+    void setPropertyValue(AsyncWebServerRequest*r,WDevice*,WProperty* p=nullptr){r->send(p?205:204);}
+''' + native.method(native.NETWORK, "handleOnThings") + r'''
+};
+int main(){
+    Probe p;
+    const char* paths[]={"/things","/things/thermostat","/things/thermostat/properties",
+                          "/things/thermostat/properties/temperature","/things/unknown"};
+    for(const char* slash:{"","/"})for(int n=0;n<5;++n){
+        AsyncWebServerRequest r;r.path=String(paths[n])+slash;p.handleOnThings(&r);
+        assert(r.status==(n==4?404:200+n));
+        r.verb=HTTP_PUT;p.handleOnThings(&r);
+        assert(r.status==(n<2?405:n==4?404:202+n));
+        p.allow=false;p.handleOnThings(&r);assert(r.status==401);p.allow=true;
+    }
+}
+'''
+        self.compile_run(source, "webthings_trailing_slash")
+
     def test_http_dispatch_always_finishes_unsupported_methods(self):
         source = r'''
 #include "Arduino.h"

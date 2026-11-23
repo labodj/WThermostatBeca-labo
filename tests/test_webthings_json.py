@@ -48,6 +48,7 @@ class WebThingsResponseTests(unittest.TestCase):
         #include "Stream.h"
         #include "lib/WAdapter/WAdapter/WProperty.h"
         #include "lib/WAdapter/WAdapter/WTargetTemperatureProperty.h"
+        #include "lib/WAdapter/WAdapter/WHeatingCoolingProperty.h"
         #include "lib/WAdapter/WAdapter/WTemperatureProperty.h"
         #include "lib/WAdapter/WAdapter/WOnOffProperty.h"
         #include "lib/WAdapter/WAdapter/WStringStream.h"

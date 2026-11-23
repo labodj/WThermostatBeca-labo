@@ -156,6 +156,7 @@ struct Probe{
     Client client;Client*mqttClient=&client;Log log;Log*wlog=&log;WDevice one,two;WDevice*firstDevice=&one;
     WStringStream stream{3096};bool enabled=true,discoveryOk=true;
     unsigned long hassDiscoveryRequestedAt=0;bool hassDiscoveryPending=false,hassStatePending=false;
+    std::vector<std::pair<String, String>> replies;
     unsigned discoveries=0,states=0;String base="home/room";
     Probe(){one.next=&two;}
     bool isSupportingMqtt(){return true;}bool isSupportingMqttHASS(){return enabled;}
@@ -167,7 +168,7 @@ struct Probe{
     void logHeap(const char*){}void notify(bool){}
     WStringStream*getMQTTResponseStream(){stream.flush();return &stream;}
     WDevice*getDeviceById(const char*id){return !strcmp(id,"thermostat")?&one:nullptr;}
-    bool publishMqtt(const char*,const char*,bool){return true;}
+    bool publishMqtt(const char* topic,const char* value,bool){replies.emplace_back(topic,value);return true;}
     void mqttSendDeviceState(const String&,WDevice*){++states;}
 '''
         for name in ("requestHassDiscovery", "serviceHassDiscovery", "mqttCallback", "mqttReconnect"):
@@ -211,6 +212,17 @@ int main(){
     p.hassDiscoveryPending=false;p.hassStatePending=false;p.base="homeassistant";
     char command[]="homeassistant/cmnd/things/thermostat/properties/mode",heat[]="heat";
     p.mqttCallback(command,heat,4);assert(p.states==1&&p.one.property.equalsString("heat"));
+    p.replies.clear();char empty[]="";
+    p.mqttCallback(command,empty,0);
+    assert(p.states==2&&p.one.property.equalsString("heat"));
+    for(const char* reply:{"homeassistant/stat/things/thermostat/properties/mode","homeassistant/stat/things/thermostat/mode"}){
+        assert(std::count(p.replies.begin(),p.replies.end(),std::make_pair(String(reply),String("heat")))==1);
+    }
+    p.one.property.setNull();p.replies.clear();p.mqttCallback(command,empty,0);
+    assert(p.replies.empty()&&p.states==3);
+    p.one.property.setOnValueRequest([](WProperty* prop){prop->setString("");});
+    p.mqttCallback(command,empty,0);
+    assert(p.replies.size()==2&&p.replies.front().second.length()==0);
     puts("PASS reconnect, HA Birth, debounce, retry, deferred replay, disabled discovery and millis wrap");
 }
 '''

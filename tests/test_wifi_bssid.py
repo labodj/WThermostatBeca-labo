@@ -58,7 +58,7 @@ struct Probe{
     Print output;WLog log{0,0,&output};WLog*wlog=&log;
     WSettings storage{&log,0xf1,false};WSettings*settings=&storage;
     WProperty*idx=nullptr,*ssid=nullptr,*mqttBaseTopic=nullptr;
-    WProperty apFallback{"ap","AP",BOOLEAN};WProperty*supportingApFallback=&apFallback;
+    byte activeNetworkFlags=0;
     String extendedWifiPassword;
     WNetworkStrings networkStrings;
     String removedIdx,removedTopic;unsigned removals=0;
@@ -129,7 +129,8 @@ int main(){
     // Every migrated bit pattern enables fallback exactly once and preserves all other bytes.
     for(unsigned flags=0;flags<64;++flags){
         p.settings->setString(PROP_PASSWORD,"password");p.settings->setByte(PROP_NETBITS1,flags);
-        const auto before=EEPROM.bytes;p.migrateRecoverySettings();
+        const auto before=EEPROM.bytes;p.activeNetworkFlags=flags;p.migrateRecoverySettings();
+        assert(p.activeNetworkFlags==(flags|NETBITS1_APFALLBACK));
         assert(p.settings->getByte(PROP_NETBITS1)==(flags|NETBITS1_APFALLBACK|NETBITS1_RECOVERY_MIGRATED));
         for(unsigned i=0;i<EEPROM.bytes.size();++i)if(i!=82)assert(EEPROM.bytes[i]==before[i]);
         p.settings->setByte(PROP_NETBITS1,(flags|NETBITS1_RECOVERY_MIGRATED)&~NETBITS1_APFALLBACK);

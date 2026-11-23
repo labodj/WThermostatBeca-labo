@@ -7,6 +7,7 @@
 #include <ESP8266WiFi.h>
 #include <EEPROM.h>
 #include "../lib/WAdapter/WAdapter/WDevice.h"
+#include "../lib/WAdapter/WAdapter/WHeatingCoolingProperty.h"
 #include "../lib/WAdapter/WAdapter/WPage.h"
 #include "WClock.h"
 
@@ -266,7 +267,6 @@ const char* ATTYPE_MODE PROGMEM = "ThermostatModeProperty";
 const char* ATTYPE_PRESET PROGMEM = "ThermostatPresetProperty";
 const char* ATTYPE_FANMODE PROGMEM = "FanModeProperty";
 const char* ATTYPE_ACTION PROGMEM = "ThermostatActionProperty";
-const char* ATTYPE_HEATINGCOOLING PROGMEM = "HeatingCoolingProperty";
 
 
 const char* ID_PAGE_SCHEDULE PROGMEM = "schedules";
@@ -914,6 +914,13 @@ public:
         if (network->log()->isEnabled(LOG_LEVEL_TRACE))
             network->log()->trace(F("commandCharsToSerial: %s, ChckSum 0x%02x"),
                 getCommandAsString(length, command).c_str(), checksum);
+    }
+
+    void refreshMqttState() {
+        // The broker can reconnect between device loops and have lost its retained state.
+        lastMcuAvailability = -1;
+        lastScheduleNotify = 0;
+        queryAllDPs();
     }
 
     void queryAllDPs() {

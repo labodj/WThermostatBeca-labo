@@ -81,14 +81,6 @@ class ESPStackDecoder(miniterm.Transform):
   def rx(self, text):
     self.rxbuf += text
     if '\r' in self.rxbuf or '\n' in self.rxbuf:
-      #lines = re.split("[\\r\\n]+", self.rxbuf)
-      #self.rxbuf = lines[-1]
-      #lines = lines[0:-1]
-      #for line in lines:
-      #  info = self.handle_line(line)
-      #  if info and info != "":
-      #    #TODO insert at the right position
-      #    text += info
       prev = 0
       infos = []
       for m in re.finditer("(\\r\\n?|\\n)[\\r\\n]*", self.rxbuf):
@@ -102,9 +94,11 @@ class ESPStackDecoder(miniterm.Transform):
         p = max(0, info[0])
         text = text[0:p] + info[1] + text[p:]
       self.rxbuf = self.rxbuf[prev:]
+    # A missing newline on the serial port must not grow the decoder indefinitely.
+    self.rxbuf = self.rxbuf[-4096:]
     return text
   def handle_line(self, line):
-    m = re.search(r"Exception \(([0-9]*)\):\s*$", line)
+    m = re.search(r"Exception \(([0-9]{1,3})\):\s*$", line)
     if m:
       if int(m.group(1)) in self.EXCEPTION_CAUSES:
         return " -> Exception cause: %s\n" % (self.EXCEPTION_CAUSES[int(m.group(1))],)
@@ -119,7 +113,6 @@ class ESPStackDecoder(miniterm.Transform):
     elif line == "<<<stack<<<" or ":" not in line:
       self.in_stack = False
     if self.in_stack:
-      info = ""
       addrs = []
       for m in re.finditer(" (40[0-2][0-9a-fA-F]{5,5})\\b", line):
         #info += "address: %s\n" % (m.group(1),)
@@ -141,37 +134,29 @@ class ESPStackDecoder(miniterm.Transform):
     except (OSError, subprocess.SubprocessError) as error:
       return "Stack decode unavailable: %s\n" % error
 
-miniterm.TRANSFORMATIONS['espstackdecoder'] = ESPStackDecoder
-
-#miniterm.main(default_port="/dev/ttyUSB0", default_baudrate=115200)
-serial_instance = serial.serial_for_url(
-                os.environ.get("WTHERMOSTAT_SERIAL_PORT", "COM4" if os.name == "nt" else "/dev/ttyUSB0"),
-                115200,
-                do_not_open = True)
-
-if not hasattr(serial_instance, 'cancel_read'):
-    # enable timeout for alive flag polling if cancel_read is not available
+def main():
+  miniterm.TRANSFORMATIONS['espstackdecoder'] = ESPStackDecoder
+  serial_instance = serial.serial_for_url(
+      os.environ.get("WTHERMOSTAT_SERIAL_PORT", "COM4" if os.name == "nt" else "/dev/ttyUSB0"),
+      115200, do_not_open=True)
+  if not hasattr(serial_instance, 'cancel_read'):
     serial_instance.timeout = 1
-
-serial_instance.open()
-
-miniterm = ESPMiniterm(
-    serial_instance,
-    echo=False,
-    eol='crlf',
-    filters=["espstackdecoder"])
-miniterm.exit_character = chr(0x03) #unichr(0x1d)
-miniterm.menu_character = chr(0x14)
-miniterm.raw = False
-miniterm.set_rx_encoding('UTF-8')
-miniterm.set_tx_encoding('UTF-8')
-
-miniterm.start()
-
-try:
-    miniterm.join(True)
-except KeyboardInterrupt:
+  serial_instance.open()
+  terminal = ESPMiniterm(serial_instance, echo=False, eol='crlf', filters=["espstackdecoder"])
+  terminal.exit_character = chr(0x03)
+  terminal.menu_character = chr(0x14)
+  terminal.raw = False
+  terminal.set_rx_encoding('UTF-8')
+  terminal.set_tx_encoding('UTF-8')
+  terminal.start()
+  try:
+    terminal.join(True)
+  except KeyboardInterrupt:
     pass
-sys.stderr.write("\n--- exit ---\n")
-miniterm.join()
-miniterm.close()
+  sys.stderr.write("\n--- exit ---\n")
+  terminal.join()
+  terminal.close()
+
+
+if __name__ == "__main__":
+  main()

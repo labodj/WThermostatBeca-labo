@@ -55,7 +55,9 @@ For integrations, `GET /thermostat_reinit` and a legacy `POST /thermostat_reinit
 
 ![Network configuration](docs/images/interface/network.png)
 
-## 2. Configure MQTT (optional) and HASS Autodiscovery
+<a id="2-configure-mqtt-optional-and-hass-autodiscovery"></a>
+
+## 3. Configure MQTT (optional) and Home Assistant discovery
 
 * Stay at page 'Network configuration'
 * Select checkbox 'Support MQTT', web page will extend
@@ -85,16 +87,14 @@ For integrations, `GET /thermostat_reinit` and a legacy `POST /thermostat_reinit
 
 * Open the webpage of the thermostat in your favorite browser `http://<device_ip>/`
 
-## 3. Configure thermostat device
+<a id="3-configure-thermostat-device"></a>
+
+## 5. Configure thermostat device
 
 * Go to 'Configure device'
 * Choose your thermostat **model**
 * Choose, if heating or cooling **relay monitor hardware hack** should be enabled. Hardware modification necessary to work, see <https://github.com/klausahrenberg/WThermostatBeca/issues/17#issuecomment-552078026>
-* **Relay State Calculation**: The WiFi-Module does not know without the Hardware Hack if the Realy is Opened or Closed.
-   But we can calculate the state, based on the measured temperature.
-   Set this paramter to the same Deadzone/Deadband-Temperature value which is confired at thermostat settings (BHT-002: Option Code 2, BAC-002: Option Code C). Value is between 1 and 5 degree Celsius, factory default is 1.
-   Does not apply if state of Relay is configured to Hardware-Hack.
-setting to calculate the state of the Heating Relay
+* **Relay State Calculation** estimates the relay state from the measured temperature. Enter the deadband configured on the thermostat panel (BHT-002 option 2, BAC-002 option C). The firmware accepts 1–5 °C. A hardware relay monitor reads the relay directly and ignores this setting.
 * Choose if **floor sensor** values should be reported (enable if you have floor sensor connected and are running in 'AL'-Mode). See also next section
 * Choose if the thermostat should **switch back from manual heating mode** to schedule mode at the next scheduled period change
 * Choose **workday and weekend** start in your region
@@ -114,7 +114,9 @@ In settings menu of MCU (option 4) you can switch between internal (IN), externa
   * See [Issue #27](https://github.com/fashberg/WThermostatBeca/issues/27) with Workaround by @IanAdd with Home Assistant controlled Heating/Idle state depending on floorTemperature
   * Hint: Long pressing the rightest button for 5 seconds (while device switched on) the displays shows external temperature.
 
-## 4. Configure clock settings
+<a id="4-configure-clock-settings"></a>
+
+## 6. Configure clock settings
 
 The ESP8266 queries the configured NTP server in the background when Wi-Fi connects and synchronizes every five minutes after a successful reply. A server outage leaves the thermostat serial interface responsive. The clock runs from its last accepted time for 48 hours. After that the firmware marks time invalid and waits for a new synchronization before sending time to the thermostat controller. **Info** shows the client state and the age of the last successful synchronization.
 
@@ -144,7 +146,15 @@ The ESP8266 queries the configured NTP server in the background when Wi-Fi conne
 
   Sunday may be written as `0` in legacy examples or `1` in the documented day numbering. Rules contain five fields; omit Tasmota's hemisphere field. Check current regional rules against the [IANA time zone database](https://www.iana.org/time-zones). Updating firmware does not replace your saved time rules.
 
-## 5. Troubleshooting
+<a id="5-troubleshooting"></a>
+
+## Troubleshooting
+
+### Wi-Fi works but MQTT is offline
+
+Open **Info** over Wi-Fi and check **MQTT connection**. If the broker rejected the login, verify the username, password and broker permissions. The thermostat retries a rejected login after five minutes. For other connection failures it retries after 30 seconds. Restoring the broker or correcting its credentials there requires no thermostat reboot.
+
+The retained `<base>/tele/LWT` reports the MQTT connection. The separate `<base>/tele/mcu` reports whether the controller has provided a complete state. Check both when diagnosing an unavailable thermostat. During a broker outage you can still read the current state and programs through the local WebThings API while the thermostat is reachable over Wi-Fi.
 
 ### Logging
 
