@@ -19,7 +19,7 @@ struct Net{Log logger;Log*log(){return &logger;}bool isDebug(){return false;}};
 struct Clock{bool valid=true;byte day=1;unsigned minute=120;bool isValidTime(){return valid;}byte getWeekDay(){return day;}
  bool isTimeEarlierThan(byte h,byte m){return minute<h*60U+m;}bool isTimeLaterThan(byte h,byte m){return minute>=h*60U+m;}
  bool isTimeBetween(byte h,byte m,byte hh,byte mm){return isTimeLaterThan(h,m)&&isTimeEarlierThan(hh,mm);}};
-const int LOG_LEVEL_TRACE=5;
+const int LOG_LEVEL_NOTICE=4, LOG_LEVEL_TRACE=5;
 ''' + constants + r'''
 struct Probe{
  Net net;Net*network=&net;Clock clock;Clock*wClock=&clock;

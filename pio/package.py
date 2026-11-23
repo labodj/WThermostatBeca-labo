@@ -30,7 +30,8 @@ validation = {}
 for environment in ("wthermostat", "wthermostat-minimal"):
     name = environment + "-" + args.version
     data = (root / "build_output/firmware" / (name + ".bin")).read_bytes()
-    assert args.version.encode() in data, "Image version does not match package"
+    firmware_version = args.version + ("-minimal" if environment == "wthermostat-minimal" else "")
+    assert b"\0" + firmware_version.encode() + b"\0" in data, "Image version or variant does not match package"
     # Both bootloader and application must match the supported 1 MiB DOUT board.
     assert data[:4] == bytes([0xE9, 2, 3, 0x20])
     assert data[4096:4100] == bytes([0xE9, 5, 3, 0x20])

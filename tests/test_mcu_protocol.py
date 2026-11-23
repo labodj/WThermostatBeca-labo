@@ -24,7 +24,7 @@ struct Clock {
 };
 struct Log{template<class...T>void notice(T...){}template<class...T>void warning(T...){}template<class...T>void trace(T...){}bool isEnabled(int){return false;}};
 struct Net{Log value;Log*log(){return &value;}bool isDebug(){return false;}};
-const int LOG_LEVEL_TRACE=5;
+const int LOG_LEVEL_NOTICE=4, LOG_LEVEL_TRACE=5;
 struct Probe{
     Net net;Net*network=&net;Clock clock;Clock*wClock=&clock;
     bool mcuInitialized=false,receivingDataFromMcu=false,receivedStates[STATE_COMPLETE]{};

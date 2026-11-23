@@ -1959,9 +1959,11 @@ private:
 			updateRelaySimulation();
 		} else if ((this->currentSchedulePeriod != -1) && (schedulesMode->equalsString(SCHEDULES_MODE_AUTO))) {
 			double temp = (double) schedules[this->currentSchedulePeriod + 2] / getTemperatureFactor();
-			String p = String(currentSchedulePeriod>=36 ? SCHEDULES_DAYS[2] : (currentSchedulePeriod>=18 ? SCHEDULES_DAYS[1] : SCHEDULES_DAYS[0]));
-			p.concat(SCHEDULES_PERIODS[(this->currentSchedulePeriod %18) /3]);
-			network->log()->notice((String(PSTR("We take temperature from period '%s', Schedule temperature is "))+String(temp)).c_str() , p.c_str());
+            if (network->log()->isEnabled(LOG_LEVEL_NOTICE)) {
+                network->log()->notice(F("We take temperature from period '%c%c', Schedule temperature is %s"),
+                    SCHEDULES_DAYS[currentSchedulePeriod / 18], SCHEDULES_PERIODS[(currentSchedulePeriod % 18) / 3],
+                    String(temp).c_str());
+            }
 			targetTemperature->setSuppressOnChange();
 			targetTemperature->setDouble(temp);
 			updateRelaySimulation();
@@ -2027,11 +2029,12 @@ private:
 			// only set targetTemperatureManualMode and targetTemperatureManualModeToMcu() if current mode is Manual
 			if (force || !WProperty::isEqual(targetTemperatureManualMode, this->targetTemperature->getDouble(), 0.01)) {
 				if (!force) targetTemperatureManualMode = this->targetTemperature->getDouble();
-				network->log()->trace((String(PSTR("onChangeTargetTemperature, temp: "))+String(targetTemperatureManualMode)).c_str());
+				if (network->log()->isEnabled(LOG_LEVEL_TRACE))
+                    network->log()->trace(F("onChangeTargetTemperature, temp: %s"), String(targetTemperatureManualMode).c_str());
 				targetTemperatureManualModeToMcu();
 				schedulesMode->setString(SCHEDULES_MODE_OFF);
-			} else {
-				network->log()->trace((String(PSTR("setTargetTemperatureNoChange, temp: "))+String(this->targetTemperature->getDouble())).c_str());
+			} else if (network->log()->isEnabled(LOG_LEVEL_TRACE)) {
+                network->log()->trace(F("setTargetTemperatureNoChange, temp: %s"), String(this->targetTemperature->getDouble()).c_str());
 			}
 		}
 		updateRelaySimulation();
@@ -2039,7 +2042,8 @@ private:
 
     void targetTemperatureManualModeToMcu() {
     	if (!this->receivingDataFromMcu) {
-    		network->log()->notice((String(F("Set target Temperature (manual mode) to "))+String(targetTemperatureManualMode)).c_str());
+            if (network->log()->isEnabled(LOG_LEVEL_NOTICE))
+                network->log()->notice(F("Set target Temperature (manual mode) to %s"), String(targetTemperatureManualMode).c_str());
     	    //55 AA 00 06 00 08 02 02 00 04 00 00 00 2C
 			const uint32_t value = static_cast<uint32_t>(round(targetTemperatureManualMode * getTemperatureFactor()));
     	    unsigned char setTemperatureCommand[] = { 0x55, 0xAA, 0x00, 0x06, 0x00, 0x08,

@@ -1,13 +1,92 @@
 # Changelog
 
-## Version 1.27.7
+Entries run from newest to oldest. The Labo fork starts at 1.24. Downloadable builds and their original release notes are listed on [GitHub Releases](https://github.com/labodj/WThermostatBeca-labo/releases).
+
+## Version 1.27.8
+
+* Send a consistent date and weekday to the thermostat MCU when UTC and local time fall on different days. Each time update uses a single calendar conversion.
+* Limit automatic retries for an undelivered MQTT state or schedule to once per second. A device waiting to retry does not delay updates from other devices.
+* Skip temperature formatting when its log level is disabled. The minimal OTA firmware also releases 1 KiB of heap by omitting the unused serial receive buffer.
+* Check the complete embedded version and firmware variant when packaging release images.
+
+## Version 1.27.8-rc.1 (local candidate)
+
+* Introduced the UTC weekday fix, bounded MQTT retries and smaller minimal firmware included in 1.27.8. The final release also avoids formatting disabled setpoint logs and checks the identity of each packaged binary.
+
+## Version 1.27.7 (local build, included in 1.27.8)
 
 * Keep the previous settings snapshot during flash writes. The first changed save migrates existing settings automatically.
 * Recover from wireless outages, rejected MQTT credentials, short network writes and an unresponsive thermostat MCU. Serve schedules after the MCU has supplied them.
 * Synchronize time in the background and retain the last valid time for up to 48 hours offline.
 * Build Home Assistant discovery directly in the MQTT buffer. Retry incomplete payloads and return HTTP 503 when a complete schedule response is unavailable.
 
-## Version 1.23-fas
+## Version 1.27.6
+
+* Wait for the broker to acknowledge subscriptions before announcing availability. Preserve pending state updates after a send failure and protect incoming MQTT packets while logging.
+* Reject malformed MCU schedules and HTTP single-property writes that name another property or add unexpected fields. Skip MCU message formatting when logging is disabled.
+* Update the ESP8266 Arduino core and toolchain. The normal build used 356 fewer bytes of static RAM than 1.27.5.
+
+## Version 1.27.5
+
+* Restore the schedule read endpoint and wait for programs from the MCU before reading or changing them. Initialize optional controller data at startup.
+* Retry failed MQTT subscriptions and state publications. Keep expired NTP time invalid through timer rollover and reject negative values for unsigned properties.
+* Fix relay pin reads, nested JSON separators, property bounds and recursive callbacks. Update Home Assistant discovery only after a successful configuration save.
+
+## Version 1.27.4 (development build)
+
+* The schedule page gained explicit waiting and save-unavailable messages while the controller was still supplying its programs. These messages are present in the archived 1.27.4 firmware and shipped publicly in 1.27.5.
+
+## Version 1.27.3
+
+* Update the official ESPAsyncWebServer dependency with fixes for partial TCP writes and the lifetime of queued HTTP response and handshake buffers.
+
+## Version 1.27.2
+
+* Use the official ESPAsyncWebServer package and update the ESP8266 TCP dependency to fix client lifetime during a connection abort.
+* Keep network defaults on blank or unrecognized EEPROM. Recognized older settings still migrate.
+
+## Version 1.27.1
+
+* Give Home and Live WebLog a confirmation screen for MCU resynchronization. A user can now cancel before restarting the handshake.
+* Add WThermostat-Labo branding and direct links to downloads and support. Clarify the active WebLog level and organize the Info page.
+
+## Version 1.27.0
+
+* Report failed configuration saves, roll back in-memory changes and preserve saved passwords when a form leaves them untouched. Improve Digest login and allow protected configuration forms to work without JavaScript.
+* Keep the web interface usable with fragmented memory or a slow log viewer. Stream bounded WebThings responses and report incomplete output.
+* Validate MQTT command batches, preserve incoming commands during logging, and correct BAC state metadata, missed daylight-saving transitions and periodic publication across timer rollover.
+* Pin the maintained async networking dependencies and publish firmware checksums, build manifests and matching symbols.
+
+## Version 1.26.0-labo
+
+* Switching from a program to a manual temperature now sends both commands to the controller. Refreshing a reported target preserves the current mode.
+* Fix the last schedule period at midnight, power-off reporting, ECO setpoints and BAC cooling and fan state. Preserve the manual target while ECO is active.
+* Extend storage for hostnames, broker settings, topics and credentials while preserving older configuration layouts and device identity. Update the Home Assistant and configuration guides.
+
+## Version 1.25.0-labo.5
+
+* Open a temporary recovery AP after a sustained Wi-Fi or static-gateway failure and keep trying the configured station connection. Retain the BSSID lock on reconnect and choose an alternate AP subnet when necessary.
+* Add temporary local administrator recovery through the thermostat's physical Wi-Fi setup gesture. Support full-length Wi-Fi passphrases and 64-digit hexadecimal PSKs.
+
+## Version 1.25.0-labo.4
+
+* Update Home Assistant discovery for supported profiles and preserve discovery identifiers. Add optional administrator login for configuration, firmware uploads, WebThings writes and live logs.
+* Add optional access-point locking by BSSID and Wi-Fi recovery. Bundle WAdapter, pin the ESP8266 build tools and add host, Home Assistant and static-analysis checks.
+* Fix incomplete schedule pages on low memory so the Save and Back buttons remain accessible at all supported temperature precisions.
+
+### Earlier 1.25.0-labo builds
+
+| Version | Changes |
+|---|---|
+| `1.25.0-labo.3` | Make administrator login optional. Preserve the existing choice when saving older forms and keep login enabled when migrating existing configurations. |
+| `1.25.0-labo.2` | Fix the native test build on systems with fortified glibc, and document Arduino firmware image CRC validation. |
+| `1.25.0-labo.1` | Update Home Assistant discovery, add authenticated administration and OTA, and introduce BSSID locking with timed recovery. Bundle WAdapter, pin the toolchain and add native and integration test gates. |
+
+## Version 1.24
+
+* Start the Labo fork with an updated ESP8266 Arduino core, Espressif SDK 3.0.5 and ESP32Async networking libraries. Tune flash and memory placement to keep the normal firmware within the 1 MiB OTA budget.
+
+## Version 1.23-fas (upstream tag v1.23.beta1-fas)
 
 * Support for static IP-Addresses - thanks to @N-b-dy
 * Support for current IP-Address sensor for Home Assistant - thanks to @Henry-Sir
@@ -38,7 +117,7 @@
 
 * moved from travis-ci to github-actions @fashberg
 
-## Version 1.19-fas
+## Version 1.19-fas (upstream tag v1.19.beta1-fas)
 
 * Fix/Enhancement #54: If enabled, all single Properties are sent out every notification interval, not only if changed
 * Fix #52: Documentation on SSID and renamed Wifi to WiFi
@@ -48,6 +127,10 @@
 
 * Fixed Relay State Calculation #26 again
 * Daylight Saving Bug #62 fixed
+
+## Version 1.18.beta1-fas
+
+* Revisit the thermostat deadzone calculation for upstream issue 20. The 1.18 release records the heating and daylight-saving fixes above.
 
 ## Version 1.17-fas
 
@@ -77,6 +160,17 @@
   * Apple Captive Portal support
   * Case Insensitive true/false (HomeAssistant Uses "True" if boolean values are enabled) #32
   * Typos
+
+### 1.16 upstream previews
+
+| Tag | Changes introduced in the preview |
+|---|---|
+| `v1.16.beta6-fas` | Fix the Info page, improve the precision of the time sent to the MCU, and remove old Home Assistant discovery entries when settings change. |
+| `v1.16.beta5-fas` | Fix BAC-002 hold-state handling and the Info page. |
+| `v1.16.beta4-fas` | Expose thermostat and clock diagnostics, correct BAC HVAC, fan and hold modes, and add Gitpod and Travis build support. |
+| `v1.16.beta3-fas` | Add BAC-002 climate discovery and update the documentation. |
+| `v1.16.beta2-fas` | Accept Home Assistant boolean values regardless of case. |
+| `v1.16.beta-fas` | Correct the ECO temperature, fix WebThings discovery, support negative temperatures, add Apple captive-portal handling and expose Wi-Fi signal strength. |
 
 ## Version 1.15-fas
 

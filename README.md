@@ -1,238 +1,99 @@
 # WThermostat-Labo
 
-**WThermostat-Labo** is local-control firmware for compatible **ESP8266 Beca/Moes/Qiumi Wi-Fi thermostats**, without a Tuya cloud dependency. This is the maintenance fork of [fashberg/WThermostatBeca](https://github.com/fashberg/WThermostatBeca), originally based on [klausahrenberg/WThermostatBeca](https://github.com/klausahrenberg/WThermostatBeca).
+Control a compatible **ESP8266 Beca, Moes or Qiumi thermostat** from a browser on your own network. Add Home Assistant or another MQTT client if you want automation. The thermostat's own controller continues to run its display, sensors and stored programs.
 
-**[Download the latest stable release](https://github.com/labodj/WThermostatBeca-labo/releases/latest)** for firmware, release notes and upgrade-specific information.
+**[Download the latest stable firmware](https://github.com/labodj/WThermostatBeca-labo/releases/latest)** · [Check your hardware](#hardware-compatibility) · [Upgrade an existing thermostat](#upgrade-an-existing-thermostat) · [Version history](Changes.md)
 
 [![Build](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml/badge.svg)](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml)
-[![Latest stable release](https://img.shields.io/github/v/release/labodj/WThermostatBeca-labo)](https://github.com/labodj/WThermostatBeca-labo/releases)
 
 ## Differences from the fashberg firmware
 
-This fork retains the original local web, MQTT and thermostat-controller model, with these additions and corrections:
+WThermostat-Labo builds on the local web interface, MQTT API and thermostat profiles from the original projects. If you already run the fashberg firmware, these are the changes you will notice. [Fashberg firmware](https://github.com/fashberg/WThermostatBeca) · [Original project by Klaus Ahrenberg](https://github.com/klausahrenberg/WThermostatBeca)
 
-- **Home Assistant discovery:** current MQTT schemas, profile-specific modes and presets, MCU readiness, reconnect/Birth republishing, retry handling and removal of obsolete discovery configurations. Existing supported device/entity identifiers are preserved.
-- **Wi-Fi recovery:** optional BSSID locking across reconnections, an emergency AP after a persistent connection or static-gateway failure, and temporary local login recovery through the thermostat panel's Wi-Fi setup function. Healthy starts do not open a recovery AP.
-- **Administration:** optional administrator login, HTTP Digest authentication, protected configuration forms and OTA, and confirmation before thermostat resynchronization. Passwords are kept out of page source and diagnostic logs.
-- **Configuration compatibility:** recognized legacy layouts retain settings and device identity. Longer Wi-Fi/MQTT credentials, hostnames and topics are supported; checked saves report failures and restore in-memory settings instead of silently accepting partial changes.
-- **Thermostat behavior:** corrected automatic/manual and ECO transitions, BAC cooling/fan state reporting, schedule handling across midnight, and state refresh after power/mode changes. Temperature precision and controller-specific behavior remain configurable.
-- **Clock and messaging:** more reliable DST transitions and timer rollover handling, validated MQTT command batches, bounded UART/JSON parsing and complete WebThings responses.
-- **Web interface and transport:** WThermostat-Labo branding and project links, clearer diagnostics and logging status, bounded response buffers, WebLog backpressure and fixes for partial TCP writes and buffer lifetimes on the ESP8266.
-- **Maintenance:** pinned dependencies, a maintained ESP8266 TCP fork without build-time patches, native regression tests, architecture-aware static analysis and CI-built release packages with checksums and source/build manifests.
-
-Supported hardware, setup and recovery instructions are below. Individual release changes belong in the [release notes](https://github.com/labodj/WThermostatBeca-labo/releases).
-
-## Get the firmware
-
-Download these files from the [latest stable release](https://github.com/labodj/WThermostatBeca-labo/releases/latest):
-
-| File in the release | Purpose |
+| When you use the thermostat | What the Labo fork improves |
 |---|---|
-| **`wthermostat-<version>.bin`** | Normal firmware for a supported thermostat; use this image for an ordinary upgrade. |
-| `wthermostat-<version>.bin.gz` | The same image compressed for OTA paths that support gzip; not for direct serial flashing. |
-| `wthermostat-minimal-<version>.bin` / `.bin.gz` | Temporary OTA bridge when space is insufficient. It has **no thermostat control, MQTT or clock**; replace it with normal firmware afterwards. |
-| `wthermostat-symbols-<version>.zip` | Matching normal ELF/MAP files for diagnosis, not a flash image. |
-| `SHA256SUMS`, `BUILD-MANIFEST.json`, `SOURCE-MANIFEST.json` | Artifact checksums, build/image validation and source provenance. |
-
-The normal image is built for **ESP8266, 1 MiB flash, DOUT, 40 MHz flash / 80 MHz CPU**. Check the hardware before installation. Debug firmware is for development boards only: its UART log output conflicts with the thermostat MCU. It is not published as an installable thermostat image.
-
-Verify downloaded files from their directory:
-
-```sh
-sha256sum --ignore-missing -c SHA256SUMS
-```
+| Change the temperature or program | A manual setpoint reaches the controller even when a program is active. ECO preserves your previous manual setting. Midnight periods, power changes and BAC cooling and fan states are reported correctly. |
+| Open Home Assistant after a restart | Discovery restores the climate entity, supported sensors and diagnostics. The thermostat waits for valid controller data before showing availability and republishes discovery after a broker or Home Assistant restart. Existing supported entity IDs are preserved. |
+| Lose Wi-Fi, MQTT or internet time | Wi-Fi reconnects, including to an optionally locked access point. MQTT backs off after a rejected login and retries pending updates. The clock runs for up to 48 hours after its last valid sync. Daylight-saving changes and the weekday sent to the panel stay consistent across midnight. |
+| Save settings or lose power | Checked saves preserve recognized legacy settings, credentials and device identity. Two flash sectors hold successive settings snapshots. After an interrupted save the ESP can recover a complete snapshot. Saving identical settings avoids another erase. |
+| Configure or diagnose a device | Administrator login protects configuration and OTA by default. Full-length Wi-Fi credentials are supported. Complete schedule forms, a live log, clearer status and a confirmation before MCU resync make local maintenance easier. |
+| Run on a 1 MiB ESP8266 | Bounded web and MQTT responses, fixes for partial TCP writes and paced retries reduce work under memory pressure. Disabled temperature logs skip formatting. Release builds include verified images, checksums and matching debug symbols. |
 
 ## Hardware compatibility
 
-These families were supported or reported working by the original projects; that history does **not** mean every revision has been tested with this release:
+Check the **Wi-Fi module and thermostat controller profile** before downloading. Similar-looking thermostats can contain different chips. This project targets the ESP8266 with a compatible MCU protocol and 1 MiB flash. A Wi-Fi logo or model suffix alone is insufficient.
 
-| Family | Historical variants | Controller profile |
-|---|---|---|
-| BHT-002 | GALW, GBLW, GCLW | Heating |
-| BHT-3000 / BTH-3000L | GALW/ABLW, GBLW, GCLW | Heating |
-| BHT-6000 | GALW, GBLW, GCLW | Heating |
-| BAC-002-ALW / BAC-1000-ALW | Wi-Fi air-conditioning variants | Heating, cooling, ventilation |
+| Family reported by the original projects | Profile |
+|---|---|
+| BHT-002, BHT-3000 / BTH-3000L, BHT-6000 (including GA, GB and GC Wi-Fi variants) | Heating |
+| BAC-002-ALW, BAC-1000-ALW | Heating, cooling and fan |
 
-The module must actually be **ESP8266** and use the compatible MCU protocol. A product name or Wi-Fi suffix alone does not identify the module; offline, Zigbee, ESP32 and other chip variants are not targets of this image. GA/GB/GC describe different output arrangements; select the correct device profile and retain the manufacturer's wiring specification.
-
-The ESP8266 communicates with the thermostat's separate MCU over UART. This firmware updates the ESP8266, **not** the MCU firmware. Temperature sensing, display, relay control and scheduling remain constrained by the MCU and device model. Reported `action` can be calculated rather than measured relay feedback.
-
-Historical hardware references: [installation](Installation.md), [first-flash guide](Flashing.md), [hardware diagram](docs/images/how-it-works.png). Those older guides are references for the original hardware, not proof that a particular current Tuya device supports their conversion method.
+The firmware replaces the software on the ESP8266. The separate MCU determines which sensors, relays and modes are available. Relay activity may be inferred from temperatures unless the device provides wired feedback. Check your revision and its wiring before installation. [Hardware guide](Installation.md) · [How the two controllers connect](docs/images/how-it-works.png)
 
 ## First installation and setup
 
-If WThermostat is already installed, use the upgrade section below. For a stock Tuya device, the available first-flash method depends on its module and existing firmware; the historical tuya-convert instructions are not a universal OTA installation method. Serial installation requires access to the compatible module and the original hardware precautions in [Flashing.md](Flashing.md).
-
-On initial setup:
-
-1. Connect to the configuration AP, normally named `WThermostat-<chip-id>`, using AP password `12345678`.
-2. Open `http://192.168.4.1/` if the captive portal does not open automatically.
-3. Save the 2.4 GHz Wi-Fi connection and obtain the thermostat's address from your router.
-4. Open `http://<device-ip>/`, then configure the correct thermostat profile, temperature precision, clock and schedules.
-5. Configure MQTT and Home Assistant discovery if required.
-
-The AP password and the administrative web password are different roles. After Wi-Fi is configured, administration requires login by default: **username `admin` and the saved Wi-Fi password**. The login requirement can be disabled explicitly in Network Configuration. MQTT keeps its separately configured broker credentials.
-
-Initial provisioning is accessible before a Wi-Fi configuration exists. An automatic recovery AP keeps administrator login enabled. A physical Wi-Fi setup request opens a five-minute local recovery window; see the recovery instructions below. More background: [configuration guide](Configuration.md); the authentication and recovery instructions apply to this release.
+1. **Starting from stock firmware?** Identify the module, back up the original firmware and follow the method for your hardware. Serial flashing requires disconnecting mains power. Wireless conversion applies only to certain older stock versions. [First-flash guide](Flashing.md)
+2. Join the thermostat's setup network, normally `WThermostat-<chip-id>`, with AP key `12345678`. Open `http://192.168.4.1/` and enter your 2.4 GHz Wi-Fi settings.
+3. Find the thermostat's new IP address in your router. Open it in a browser and sign in as **`admin` with the Wi-Fi password you saved**. Select the thermostat profile, temperature precision and time zone. Check that the programs shown match the panel. [Configuration guide](Configuration.md)
 
 ## Upgrade an existing thermostat
 
-1. Keep a copy of the previous firmware and record the current model/settings.
-2. Download the **normal BIN** above, verify its checksum, and use the thermostat's web firmware-update page. Keep power connected and check the displayed OTA capacity.
-3. After reboot, reload the page and sign in with `admin` and the configured Wi-Fi password.
-4. Verify model, Wi-Fi/MQTT, time, schedules and Home Assistant availability on the physical device.
+1. Record your current firmware, network settings and controller profile. Download **`wthermostat-<version>.bin`** and `SHA256SUMS` from the same release. Run `sha256sum --ignore-missing -c SHA256SUMS` in the download directory and check that the normal BIN reports `OK`.
+2. Open **Firmware Update** in the device's web interface, check the available OTA space and upload the normal BIN. Keep the thermostat powered through the reboot.
+3. Reopen the device, check the version on **Info**, then check the clock, stored programs and MQTT availability. Recognized legacy layouts migrate on a normal upgrade. AP fallback is enabled once on migration and subsequently follows your saved choice.
 
-A reset is not required for recognized legacy fashberg configurations. Migration preserves network, MQTT, clock, thermostat and schedule settings, device IDs and supported discovery IDs. AP fallback is enabled once during migration; later choices are retained. Extended storage preserves supported longer credentials and network values. A failed extension save blocks further settings writes instead of saving truncated values. Unknown layouts and values already lost by earlier firmware cannot be reconstructed.
-
-If the normal image cannot fit, the minimal image is a temporary bridge, not a usable thermostat firmware. Complete the second upgrade to normal firmware. Compressed OTA is available where the update path supports it. Local size calculations and valid image checksums are not a physical OTA test.
-
-## Administration and security
-
-| Interface | Access |
-|---|---|
-| Web configuration, info, firmware update and live log | HTTP Digest by default: `admin` / saved Wi-Fi password; optional login setting |
-| Configuration, reset and MCU reinitialization | POST; login when enabled, browser forms always include CSRF protection |
-| WebThings property reads | Anonymous read-only GET |
-| WebThings property writes | PUT; HTTP Digest when login is enabled |
-| MQTT | Existing broker credentials and broker access policy |
-
-**Resync thermostat** opens a confirmation page from Home or Live WebLog. Only **Confirm resync** starts communication resynchronization; **Cancel** returns Home. It does not reboot the ESP8266 or erase settings. See the [configuration guide](Configuration.md#resync-thermostat) for integration details.
-
-**Require administrator login** in Network Configuration controls web, OTA, WebThings writes and WebSocket log access. It defaults to enabled for existing valid configurations; old forms without the new option preserve the current choice. Disabling it lets anyone who can reach the device administer it and upload firmware. POST, Origin and configuration-form CSRF checks remain active; MQTT credentials are unaffected. Saving the setting restarts the device. Enabling login with an empty Wi-Fi password is rejected before settings are changed.
-
-The firmware supports Wi-Fi passphrases of **8–63 bytes**, including spaces and punctuation, or a **64-digit hexadecimal PSK**. HTTP Digest explicitly declares UTF-8 for non-ASCII passwords; the access point must support the same password bytes. Empty passwords are supported for open Wi-Fi with administrator login disabled. Existing credentials are preserved. Uncheck **Keep saved WiFi password** to replace a password, or leave it checked when changing other network settings. Passwords are not included in the configuration page source.
-
-Long Wi-Fi passwords use a checked extension of the existing EEPROM area. All legacy configuration fields and BSSID addresses stay in place. Hostnames and MQTT usernames support **32 bytes**; MQTT passwords and base topics support **64 bytes**. MQTT has its own **Keep saved MQTT password** checkbox: uncheck it to change or clear the saved value, including setting the literal password `___NOCHANGE___`.
-
-Record the current network and device settings before downgrading. Older firmware reads only the original EEPROM sector and may start with an earlier configuration, including earlier credentials. Recheck settings when returning to this firmware. Firmware without these extensions cannot preserve long values; change them to values supported by the destination firmware first. The original limits were 16 bytes for hostname/MQTT username and 32 bytes for Wi-Fi password/MQTT password/base topic.
-
-**Forgotten administrator password (full firmware):** use the thermostat's physical Wi-Fi setup gesture. On supported Beca controllers, hold Down while the thermostat is off, or Power + Down while it is on, until Wi-Fi setup is requested (typically around eight seconds; the gesture depends on the model). Join `WThermostat-<chip-id>` with AP key `12345678` and open `http://192.168.4.1`. For five minutes, requests received on that AP can change network/login settings without the forgotten administrator password. Disable **Require administrator login** while keeping the saved Wi-Fi password, or enter replacement Wi-Fi credentials, then save. Other settings are retained. The normal LAN interface does not gain this bypass; automatic fallback and MQTT AP commands do not enable it. Anyone nearby who knows the AP key can use this physically activated window. Minimal firmware has no thermostat-button recovery because it omits the MCU integration.
-
-HTTP Digest authenticates requests but **does not encrypt HTTP traffic**. Use a trusted network. Do not expose the thermostat's administration directly to the Internet. Password values are not written to diagnostic logs.
-
-The command-line OTA uploader prompts for the password; it does not take a password argument. Replace `192.0.2.10` with the device address and `VERSION` with the downloaded firmware version:
-
-```sh
-python pio/espupload.py --host 192.0.2.10 --file wthermostat-VERSION.bin
-```
-
-For unattended use, supply `WTHERMOSTAT_PASSWORD` through an appropriate protected environment. No device address is configured as a default upload destination.
-
-## Optional BSSID lock and recovery
-
-In **Network Configuration**, leave **AP BSSID** empty for automatic AP selection, or enter a unicast MAC such as `02:11:22:33:44:55` to select one AP. The lock applies to initial connection and reconnections. The channel remains automatic, so that AP can change channel. BSSID selection is not an authentication boundary.
-
-SDK autoconnection is disabled before station startup; automatic reconnection is enabled after the saved credentials and BSSID are passed to Wi-Fi. While connected, the firmware also checks the BSSID reported by the SDK and reconnects if it differs from the saved lock. This check is deferred during OTA uploads.
-
-**AP fallback is enabled once during legacy migration**; subsequent changes to that option are retained. No recovery AP opens on a healthy startup.
-
-With AP fallback enabled, a recovery AP opens after **120 seconds continuously offline**. A BSSID lock enables this offline recovery even if the fallback checkbox is off. Reconnection attempts continue alongside the AP and always retain the configured BSSID. An automatic recovery AP still requires administrator login when enabled.
-
-For a static IP, fallback also checks the configured gateway on the local LAN using ARP. A persistent failure opens the recovery AP even when Wi-Fi association succeeds. Internet, DNS, MQTT and Home Assistant availability are not used as health checks. Existing ARP cache entries can delay detection; a reachable gateway cannot prove that every client can reach the thermostat or detect every IP conflict. New static configurations reject inconsistent subnet masks, off-subnet gateways, network/broadcast addresses and an IP equal to the gateway before saving.
-
-The automatic AP normally uses `192.168.4.1`; if that subnet overlaps the station network, it selects `172.31.255.1` or `10.255.255.1`. Join the AP with key `12345678`; its captive DNS points to the recovery address. The normal/minimal recovery window lasts **five minutes** (two in debug builds); opening Network Configuration through that AP refreshes it. After the window expires, the AP closes and a persistent fault can reopen it after another two minutes. Settings and BSSID remain saved. OTA activity defers recovery mode changes. The physical setup gesture provides the separate AP-only recovery path described above, independent of the configured static IP.
-
-Recovery timing, saved configuration and authentication boundaries have host regression tests. Radio behavior, button gestures and browser login across devices still require testing on each supported thermostat model.
+Use the **minimal** image only as a temporary bridge when the normal BIN will not fit. Upload the normal firmware immediately afterwards to restore thermostat communication, MQTT and the clock. Use a compressed `.bin.gz` only with an OTA uploader that supports gzip. ELF/MAP symbols are for diagnosis. An interruption while the bootloader installs firmware can require serial recovery. [Firmware downloads](https://github.com/labodj/WThermostatBeca-labo/releases/latest) · [Flashing and recovery](Flashing.md)
 
 ## Home Assistant
 
-Use MQTT discovery rather than copying the old `climate: - platform: mqtt` examples.
+1. Connect the thermostat and Home Assistant's MQTT integration to the same broker.
+2. Enable MQTT and Home Assistant discovery in **Network Configuration**. Use discovery prefix `homeassistant` and Birth topic `homeassistant/status` with payload `online`.
+3. Open **Settings → Devices & services → MQTT**. BHT heating profiles offer `off`, `heat` and `auto`. BAC profiles offer `off`, `heat`, `cool` and `fan_only`, with scheduling exposed as a preset. Optional floor-temperature reporting depends on the model and settings. [MQTT integration](https://www.home-assistant.io/integrations/mqtt/) · [Device configuration](Configuration.md)
 
-1. Add/configure the [MQTT integration](https://www.home-assistant.io/integrations/mqtt/) in Home Assistant under **Settings → Devices & services**, connecting it to your broker.
-2. Configure the thermostat to use that same broker and enable MQTT and Home Assistant discovery in Network Configuration.
-3. Use the supported defaults: discovery prefix **`homeassistant`** and Home Assistant Birth topic **`homeassistant/status`** with payload **`online`**. Custom prefixes/Birth topics are not automatically detected by this firmware.
-4. Check the MQTT device/entities in Home Assistant. Climate availability also waits for a complete valid MCU state, avoiding incomplete startup readings.
+![Thermostat web interface](docs/images/interface/home.png)
 
-While Wi-Fi is connected, MQTT retries after 30 seconds on a transport failure and after five minutes when the broker rejects the login. A Wi-Fi disconnect resets the retry timer. Closing the MQTT transport lets the broker publish the retained `Offline` Last Will.
+## Administration and security
 
-Discovery includes climate, temperature sensors, network diagnostics and the applicable optional floor-temperature entity. Existing supported entity IDs are retained. The firmware republishes discovery and retained state after MQTT reconnection and supported HA Birth events, retries failed discovery and clears obsolete configurations. A thermostat reboot is not required for every HA restart.
+Administration, firmware updates and live logs use HTTP Digest by default. WebThings GET requests are public on the LAN. Disabling administrator login lets anyone who can reach the device change settings or firmware. Use the device on a trusted network. MQTT uses its own broker credentials.
 
-Broker persistence remains useful for retained messages across broker restarts, but does not replace correct broker/thermostat connectivity. Consult the [MQTT discovery documentation](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery) for Home Assistant's behavior. Configure broker settings according to its own documentation; there is no universal legacy `mqtt: broker:` YAML block to paste into modern Home Assistant.
+Wi-Fi accepts 8–63 password bytes or a 64-digit hexadecimal key. Hostnames and MQTT usernames support 32 bytes, MQTT passwords and base topics 64 bytes. Keep the saved-password boxes checked when changing other settings. Before downgrading, record your configuration and shorten any values the older firmware cannot store. An older build may read an earlier snapshot and use earlier credentials. [Login, saving and physical access recovery](Configuration.md#login-wi-fi-passwords-and-recovery)
 
-| Profile | HVAC modes | Presets |
-|---|---|---|
-| BHT heating | `off`, `heat`, `auto` | `none`, `away` |
-| BAC air conditioning | `off`, `heat`, `cool`, `fan_only` | `none`, `away`, `scheduler` |
+## Optional BSSID lock and recovery
 
-BAC scheduling is a preset/hold state, not automatic selection between heating and cooling. Entity precision and optional features follow the device profile. Discovery is validated against the Home Assistant version pinned in `requirements-homeassistant-test.txt`, including payloads, templates and negative cases. Available entities still depend on the selected profile and physical thermostat.
+Use a BSSID lock if two access points share a name and the thermostat should always choose one. With AP fallback enabled, two continuous minutes without Wi-Fi or a reachable configured static gateway open a recovery AP while the thermostat keeps reconnecting. A BSSID lock also enables offline recovery. The automatic AP keeps administrator authentication enabled.
 
-If manual entities are needed, use the current [MQTT climate documentation](https://www.home-assistant.io/integrations/climate.mqtt/) and the actual topics/properties below. Avoid configuring duplicate manual and discovered entities unintentionally.
+The normal recovery address is `192.168.4.1`. An overlapping station subnet selects `172.31.255.1` or `10.255.255.1`. Opening Network Configuration on the recovery AP refreshes the five-minute window. If you forget the administrator password, the **physical Wi-Fi setup gesture** on a supported controller opens a separate five-minute local recovery window. [Recovery instructions](Configuration.md#login-wi-fi-passwords-and-recovery)
 
 ## MQTT and WebThings API
 
-Let `<base>` be the MQTT topic configured on the thermostat, for example `home/room`.
+<details>
+<summary>Topics, HTTP endpoints and schedule examples</summary>
 
-| Topic | Direction / purpose |
+Replace `<base>` with the MQTT base topic configured on your thermostat. An empty command payload requests the current value.
+
+| Topic below `<base>` | Purpose |
 |---|---|
-| `<base>/stat/things/thermostat/properties` | Retained thermostat state |
-| `<base>/cmnd/things/thermostat/properties` | Empty payload requests state; a JSON object changes properties |
-| `<base>/cmnd/things/thermostat/properties/<property>` | Change one writable property |
-| `<base>/stat/things/thermostat/schedules` | Schedule report |
-| `<base>/cmnd/things/thermostat/schedules` | Empty payload requests schedules; JSON changes entries |
-| `<base>/tele/LWT` | Retained Wi-Fi/MQTT availability: `Online` / `Offline` |
-| `<base>/tele/mcu` | Retained MCU readiness used by discovery |
-| `<base>/tele/log` | Diagnostic log, when enabled |
+| `stat/things/thermostat/properties` | Thermostat state |
+| `cmnd/things/thermostat/properties` | Request state or send a JSON object of writable properties |
+| `cmnd/things/thermostat/properties/<property>` | Change one property |
+| `stat/things/thermostat/schedules`, `cmnd/things/thermostat/schedules` | Receive, request or update programs |
+| `tele/LWT`, `tele/mcu` | MQTT connection and controller availability |
+| `tele/log` | Diagnostic messages when enabled |
 
-Read-only request example:
+For example, publish an empty payload to `home/room/cmnd/things/thermostat/properties` and subscribe to `home/room/stat/things/thermostat/properties`. A JSON command such as `{"targetTemperature":22.0}` changes the setpoint. Outside ECO a user-set target switches a running program to manual. During ECO the reported target is read-only.
 
-```sh
-mosquitto_pub -h mqtt.example.test -t home/room/cmnd/things/thermostat/properties -n
-mosquitto_sub -h mqtt.example.test -t home/room/stat/things/thermostat/properties -v
-```
+Schedule groups `w`, `a` and `u` each contain six periods. A partial update such as `{"w1h":"06:00","w1t":20.0}` changes one entry. Times must stay in order. A final period at `00:00` carries through midnight to the next day's first period. Programs become available after the controller reports them.
 
-Replace `mqtt.example.test` with your broker and supply its required authentication using your client configuration. Writable examples below **change thermostat operation**:
+Read `GET /things/thermostat` to discover properties and allowed values for your profile. Read `GET /things/thermostat/properties` for current values or `GET /things/thermostat/schedules` for programs. The schedule endpoint returns HTTP 503 while waiting for the MCU. Writable property endpoints accept PUT with Digest authentication when login is enabled.
 
-```sh
-mosquitto_pub -h mqtt.example.test -t home/room/cmnd/things/thermostat/properties \
-  -m '{"targetTemperature":22.0,"mode":"heat"}'
-```
-
-Common state properties include `temperature`, `targetTemperature`, `deviceOn`, `schedulesMode`, `ecoMode`, `locked`, `mode`, `preset` and `action`. BAC additionally exposes `systemMode` and `fanMode`; floor temperature depends on BHT configuration. The legacy scheduling alias `holdState` is MQTT-only. Use the selected device's WebThings description for its actual properties and allowed values. `action` is read-only. While ECO is enabled, `targetTemperature` is also read-only: the ECO setpoint is reported and the previous manual setpoint is retained. Internally refreshed targets do not switch the MCU out of automatic mode. A real target-temperature command outside ECO switches automatic scheduling to manual and sends both the mode and temperature commands.
-
-Schedules use six periods in each of three day groups (`w`, `a`, `u`); group interpretation follows the configured schedule day offset. A partial update has the form:
-
-```json
-{"w1h":"06:00","w1t":20.0,"w2h":"08:00","w2t":17.0}
-```
-
-Time strings must be valid `HH:MM`, entries must remain ordered, and temperatures must satisfy configured bounds/precision. The sixth/final period may use `00:00` to mean the end of the schedule day; it becomes active at midnight and carries into the next day until that day's first period. Other reversed periods are rejected before being applied.
-
-Schedules are available only after a valid report from the thermostat controller.
-Before that report, the schedule page shows a waiting message, the HTTP schedule
-endpoint returns 503, and schedule commands do not modify or publish invented
-programs. Existing controller programs are retained.
-
-Read-only HTTP endpoints include:
-
-```text
-GET /things/thermostat
-GET /things/thermostat/properties
-GET /things/thermostat/schedules
-```
-
-Property writes use HTTP Digest PUT on the property endpoints. WebThings gateway behavior depends on its support for that authentication; this release does not provide a remote-access cloud service.
-
-## Screenshots
-
-| Home | Clock |
-| --- | --- |
-| ![Home](docs/images/interface/home.png) | ![Clock settings](docs/images/interface/clock.png) |
-
-| Thermostat | Network |
-| --- | --- |
-| ![Thermostat settings](docs/images/interface/thermostat.png) | ![Network settings](docs/images/interface/network.png) |
-
-![Schedules](docs/images/interface/schedules.png)
-
-Screenshots are illustrative; labels and available controls can differ from the current interface.
+</details>
 
 ## Build and test
 
-The ESP8266 TCP dependency is the [labodj/ESPAsyncTCP maintenance fork](https://github.com/labodj/ESPAsyncTCP), pinned to a full commit SHA. It contains the callback-lifetime fix for issue 511 and the accepted-byte and pending-output fixes, with tests in that repository. ESPAsyncWebServer is pinned to a full commit SHA in the [official repository](https://github.com/ESP32Async/ESPAsyncWebServer). Builds do not patch either dependency.
+<details>
+<summary>Build the firmware locally or run the regression suite</summary>
 
-Digest and HTTP transport integration tests require the pinned ESPAsyncWebServer sources, installed by the commands below. They exercise its Digest verifier and actual send-buffer code, including bounded TCP space and retrying data sources.
-
-The validated development host is **Linux x86_64, Python 3.14** (CI uses 3.14.10), with g++/ASan/UBSan and 32-bit multilib libraries, Node.js for JavaScript checks, and PlatformIO **6.2.0**. Other hosts need a compatible toolchain override in `platformio_override.ini`. WAdapter is already included in the repository; no submodule initialization is required.
+The validated host is Linux x86_64 with Python 3.14, g++ with 32-bit multilib, and Node.js for browser-script checks. The repository includes WAdapter and pins the ESP8266 toolchain and networking libraries.
 
 ```sh
 git clone https://github.com/labodj/WThermostatBeca-labo.git
@@ -243,48 +104,14 @@ python -m pip install -r requirements-dev.txt
 pio pkg install -e wthermostat
 python -m unittest discover -s tests -v
 CXX="g++ -m32" python -m unittest discover -s tests -v
-pio run -e wthermostat
-```
-
-The normal image is written to `build_output/firmware/wthermostat-<version>.bin`; matching ELF/MAP files are in `build_output/map/`. An optional `platformio_override.ini` can change local settings; copying the sample also overrides `appversion`, so remove or edit that sample value if you want the release filename.
-
-| PlatformIO environment | Purpose |
-|---|---|
-| `wthermostat` | Normal thermostat firmware, default |
-| `wthermostat-minimal` | Temporary network/update bridge |
-| `wthermostat-debug` | Development board only, UART logging |
-
-```sh
-# All variants, without uploading
 pio run -e wthermostat -e wthermostat-minimal -e wthermostat-debug
-
-# CI's packaged Clang check, with parser errors rejected
 python pio/check.py
-
-# Broad host Clang/Cppcheck and target GCC cross-checks
-python pio/analyze.py
 ```
 
-The broad analysis needs host Clang/Cppcheck; optional Python analyzers are pinned in `requirements-analysis.txt` and should be installed separately. It records commands, tool versions and raw reports under `build_output/validation/static/`. Clang uses an asserted ESP8266 data model; firmware compilation uses the pinned **Xtensa GCC 10.3** for the selected core. Do not substitute the host compiler for the target compiler.
+Normal images are in `build_output/firmware/`. An optional `platformio_override.ini` can override the embedded version. The debug build sends UART logs and is intended for development boards. For extended static analysis run `python pio/analyze.py` with the tools listed in `requirements-analysis.txt`. To check discovery against Home Assistant, install `requirements-homeassistant-test.txt` in a separate Python 3.14 virtual environment and run `python tests/homeassistant_schema.py`. [Test map](tests/README.md) · [Build workflow](.github/workflows/build.yml) · [Dependency provenance](lib/WAdapter/UPSTREAM.md)
 
-Run the official HA validation in a separate Python 3.14 environment:
-
-```sh
-python3.14 -m venv /tmp/wthermostat-ha-tests
-/tmp/wthermostat-ha-tests/bin/python -m pip install -r requirements-homeassistant-test.txt
-/tmp/wthermostat-ha-tests/bin/python tests/homeassistant_schema.py
-```
-
-Native regressions cover UART command ordering, startup readiness, schedules, ECO/BAC state, configuration/identity migration, credentials, recovery, MQTT delivery, web responses and timezone transitions. Both 64-bit and 32-bit host runs are required; see the [test map and focused commands](tests/README.md). Tests are grouped by behavior, with shared compilation helpers outside test discovery. The [GitHub Actions workflow](https://github.com/labodj/WThermostatBeca-labo/actions/workflows/build.yml) runs tests, firmware builds, static analysis and official HA schema validation. Tagged builds prepare a draft release with checked normal/minimal images, gzip variants, normal symbols and source/build manifests. Debug images remain development artifacts.
-
-## Practical limits
-
-- The ESP8266 has limited RAM. Large simultaneous transfers, particularly with Verbose WebLog, can return HTTP 503; retry after other transfers finish. Incomplete pages are rejected rather than served as successful responses.
-- Configuration saves alternate between two flash sectors. The firmware verifies the replacement before marking it complete and checks the generation and CRC at boot. An interrupted save can leave either complete configuration active. This protection covers settings. Power loss while the bootloader installs a firmware image can still require serial reflashing.
-- Firmware tests do not establish physical compatibility, radio reliability or controller behavior on every thermostat model.
+</details>
 
 ## Reporting a problem
 
-Include the release/tag, exact thermostat model and Wi-Fi module, selected controller profile, and whether the failure affects web, MQTT, MCU communication or recovery. Share redacted diagnostics and expected/observed behavior. Do not include Wi-Fi/MQTT passwords or unredacted configuration screenshots. Report problems in [this fork's issues](https://github.com/labodj/WThermostatBeca-labo/issues).
-
-Upstream lineage and retained notices: [WAdapter provenance](lib/WAdapter/UPSTREAM.md). The proprietary MCU and hardware remain outside this firmware's control; software tests do not replace physical qualification.
+Include the firmware version, thermostat model, Wi-Fi module, selected profile and what you observed on the panel, web interface or MQTT. Remove credentials from logs and screenshots. [Open an issue](https://github.com/labodj/WThermostatBeca-labo/issues)
