@@ -66,6 +66,8 @@ For integrations, `GET /thermostat_reinit` and a legacy `POST /thermostat_reinit
 * Back up these values before downgrading: firmware without this extension cannot preserve values longer than its original field limits.
 * To change the MQTT password, uncheck **Keep saved MQTT password** and enter the new value. Leave it checked to preserve the saved password; no placeholder value is used as a password command.
 * If you are using Home Assistant then check "Support Autodiscovery for Home Assistant using MQTT".
+* Home Assistant receives retained discovery on MQTT reconnect and after its default `homeassistant/status` birth message (`online`). Each thermostat staggers its reply by 1–3 seconds and replays state afterwards. The climate entity and keypad switch require both the ESP and the thermostat controller to be online. Wi-Fi diagnostics only require the ESP.
+* Changing thermostat settings or the MQTT base topic updates the existing entities in place. If you rename the host, move brokers or disable discovery, keep the original broker connected and writable during the save so the thermostat can retire its old discovery topics. If it was offline, clear the old retained `homeassistant/<component>/<old_id>/config` topics on that broker with an empty retained payload. Use the exact topics for that thermostat.
 * For some other Smart Home Server (e.g. OpenHAB) optionally check "Send all values also as single values via MQTT" (then you don't have to parse JSON-Strings from summarized output).
 * Press 'Save Configuration' and wait for reboot of device.
 

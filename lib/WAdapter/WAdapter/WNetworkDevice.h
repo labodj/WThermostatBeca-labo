@@ -31,6 +31,11 @@ public:
     
     }
 
+    void toJsonValues(WJson* json, WPropertyVisibility visibility) override {
+        WDevice::toJsonValues(json, visibility);
+        if (visibility == MQTT) json->propertyString("ip", network->getDeviceIp().toString().c_str());
+    }
+
     virtual void printConfigPage(AsyncWebServerRequest *request, WCheckedPrint* page) override {
 
     }

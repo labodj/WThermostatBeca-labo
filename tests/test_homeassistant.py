@@ -92,7 +92,7 @@ class HomeAssistantTests(unittest.TestCase):
                     self.assertTrue(topic.endswith("/tele/mcu"))
                     self.assertIn(payload, ("Online", "Offline"))
                     continue
-                self.assertRegex(topic, r"^homeassistant/(climate|sensor)/[a-zA-Z0-9_-]+/config$")
+                self.assertRegex(topic, r"^homeassistant/(climate|sensor|switch)/[a-zA-Z0-9_-]+/config$")
                 if case == 29 or (topic.endswith("_floorsensor/config") and
                                   (case >= 12 or not (case // 2) % 2)):
                     self.assertEqual("", payload)
@@ -115,13 +115,19 @@ class HomeAssistantTests(unittest.TestCase):
                     self.assertNotIn("none", value["pr_modes"])
                     if "fan_mode_cmd_t" in value:
                         self.assertEqual(["auto", "low", "medium", "high"], value["fan_modes"])
+                elif "/switch/" in topic:
+                    self.assertEqual("~/cmnd/things/thermostat/properties/locked", value["cmd_t"])
+                    self.assertEqual(("true", "false"), (value["pl_on"], value["pl_off"]))
+                    self.assertEqual("all", value["avty_mode"])
+                    self.assertFalse(value.get("retain", False))
                 elif value.get("device_class") in ("temperature", "signal_strength"):
                     self.assertEqual("measurement", value["state_class"])
                 if topic.endswith(("_rssi/config", "_ip/config")):
                     self.assertEqual("diagnostic", value["entity_category"])
+                    self.assertEqual("~/stat/things/network/properties", value["stat_t"])
         for case in range(24):
             group = [r for r in records if r[0] == case]
-            self.assertEqual(6, len(group))
+            self.assertEqual(7, len(group))
             self.assertEqual("Online" if case % 2 else "Offline", group[0][3])
 
     def test_reconnect_birth_retry_and_deferred_state(self):
@@ -143,6 +149,7 @@ struct WDevice{
 #include "lib/WAdapter/WAdapter/WJsonParser.h"
 struct Log{template<class...T>void notice(T...){}template<class...T>void trace(T...){}template<class...T>void warning(T...){}};
 struct Ip{String toString(){return "192.0.2.1";}};
+unsigned jitter=0;unsigned os_random(){return jitter;}
 struct Client{
     bool live=false,subscribeOk=true,commandsOk=true,metadataOk=true;unsigned connects=0;std::vector<std::string>subscriptions;
     bool connected(){return live;}void setServer(const char*,int){}
@@ -155,6 +162,7 @@ struct Client{
 struct Probe{
     Client client;Client*mqttClient=&client;Log log;Log*wlog=&log;WDevice one,two;WDevice*firstDevice=&one;
     WStringStream stream{3096};bool enabled=true,discoveryOk=true;
+    uint16_t hassDiscoveryDelay=1000;
     unsigned long hassDiscoveryRequestedAt=0;bool hassDiscoveryPending=false,hassStatePending=false;
     std::vector<std::pair<String, String>> replies;
     unsigned discoveries=0,states=0;String base="home/room";
@@ -191,7 +199,8 @@ int main(){
     testMillis=20000;p.mqttCallback(birth,online,6);assert(p.hassDiscoveryPending&&p.states==0);
     p.discoveryOk=false;p.serviceHassDiscovery(21000);assert(p.hassDiscoveryPending&&!p.hassStatePending&&p.discoveries==3);
     p.serviceHassDiscovery(21500);assert(p.discoveries==3);
-    p.discoveryOk=true;p.serviceHassDiscovery(22000);assert(p.hassStatePending&&p.discoveries==4);
+    p.serviceHassDiscovery(22999);assert(p.discoveries==3);
+    p.discoveryOk=true;p.serviceHassDiscovery(23000);assert(p.hassStatePending&&p.discoveries==4);
     testMillis=23000;p.mqttCallback(birth,online,6);p.mqttCallback(birth,online,6);
     assert(p.hassDiscoveryPending&&!p.hassStatePending);p.serviceHassDiscovery(24000);assert(p.discoveries==5);
     p.hassDiscoveryPending=false;p.hassStatePending=false;
@@ -209,6 +218,14 @@ int main(){
     Probe denied;denied.client.subscribeOk=false;assert(!denied.mqttReconnect()&&!denied.client.live);
     p.enabled=true;testMillis=ULONG_MAX-500;p.requestHassDiscovery();p.serviceHassDiscovery(498);assert(p.discoveries==5);
     p.serviceHassDiscovery(499);assert(p.discoveries==6);
+    Probe retries;jitter=2000;testMillis=0;assert(retries.mqttReconnect());retries.discoveryOk=false;
+    unsigned long now=0;
+    for(unsigned delay:{3000u,6000u,12000u,24000u,30000u,30000u}){
+        const unsigned count=retries.discoveries;
+        retries.serviceHassDiscovery(now+delay-1);assert(retries.discoveries==count);
+        now+=delay;retries.serviceHassDiscovery(now);assert(retries.discoveries==count+1);
+        testMillis=now+1;retries.requestHassDiscovery();
+    }
     p.hassDiscoveryPending=false;p.hassStatePending=false;p.base="homeassistant";
     char command[]="homeassistant/cmnd/things/thermostat/properties/mode",heat[]="heat";
     p.mqttCallback(command,heat,4);assert(p.states==1&&p.one.property.equalsString("heat"));
@@ -228,7 +245,7 @@ int main(){
 '''
         self.compile_run(source, "ha_lifecycle")
 
-    def test_actual_thermostat_discovery_removal_follows_successful_commit(self):
+    def test_thermostat_setting_saves_preserve_discovery(self):
         constants = '\n'.join(re.findall(r'^const byte BECABITS[^\n]+', BECA.read_text(), re.M))
         source = r'''
 #include "Stream.h"
@@ -257,8 +274,8 @@ int main(){EEPROM.bytes.fill(0xff);Net n;WDevice d(&n);const auto before=EEPROM.
  EEPROM.failCommits=1;AsyncWebServerRequest failed;n.handleHttpSaveDeviceConfiguration(&failed,&d);
  assert(failed.status==500&&!n.restarted&&n.removals==0&&EEPROM.bytes==before&&d.thermostatModel->getByte()==0);
  n.store.writesEnabled=true;AsyncWebServerRequest good;n.handleHttpSaveDeviceConfiguration(&good,&d);
- assert(n.restarted&&n.removals==1&&d.thermostatModel->getByte()==1);
- n.restarted=false;d.main=false;AsyncWebServerRequest other;n.handleHttpSaveDeviceConfiguration(&other,&d);assert(n.restarted&&n.removals==1);
+ assert(n.restarted&&n.removals==0&&d.thermostatModel->getByte()==1);
+ n.restarted=false;d.main=false;AsyncWebServerRequest other;n.handleHttpSaveDeviceConfiguration(&other,&d);assert(n.restarted&&n.removals==0);
 }
 '''
         self.compile_run(source, 'committed_thermostat_discovery')

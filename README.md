@@ -48,7 +48,7 @@ Use the **minimal** image only as a temporary bridge when the normal BIN will no
 
 1. Connect the thermostat and Home Assistant's MQTT integration to the same broker.
 2. Enable MQTT and Home Assistant discovery in **Network Configuration**. Use discovery prefix `homeassistant` and Birth topic `homeassistant/status` with payload `online`.
-3. Open **Settings → Devices & services → MQTT**. BHT heating profiles offer `off`, `heat` and `auto`. BAC profiles offer `off`, `heat`, `cool` and `fan_only`, with scheduling exposed as a preset. Optional floor-temperature reporting depends on the model and settings. [MQTT integration](https://www.home-assistant.io/integrations/mqtt/) · [Device configuration](Configuration.md)
+3. Open **Settings → Devices & services → MQTT**. BHT heating profiles offer `off`, `heat` and `auto`. BAC profiles offer `off`, `heat`, `cool` and `fan_only`, with scheduling exposed as a preset. Both profiles expose the keypad lock. BHT adds floor temperature when the external probe is enabled. [MQTT integration](https://www.home-assistant.io/integrations/mqtt/) · [Device configuration](Configuration.md)
 
 ![Thermostat web interface](docs/images/interface/home.png)
 

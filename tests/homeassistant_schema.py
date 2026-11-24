@@ -7,7 +7,7 @@ import json
 import tempfile
 import unittest
 import probatio
-from homeassistant.components.mqtt import climate, discovery, sensor
+from homeassistant.components.mqtt import climate, discovery, sensor, switch
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.template import Template
 from test_homeassistant import discovery_records
@@ -38,7 +38,7 @@ class OfficialSchemaTests(unittest.IsolatedAsyncioTestCase):
                 component = topic.split("/")[1]
                 self.assertIsNotNone(discovery.TOPIC_MATCHER.fullmatch(topic.removeprefix("homeassistant/")))
                 config = normalized(payload)
-                schema = climate.DISCOVERY_SCHEMA if component == "climate" else sensor.DISCOVERY_SCHEMA
+                schema = {"climate": climate, "sensor": sensor, "switch": switch}[component].DISCOVERY_SCHEMA
                 validated = schema(deepcopy(config))
                 # HA ignores unknown discovery keys: catch typos rather than accept that fallback.
                 self.assertFalse(set(config) - set(validated))
@@ -50,11 +50,16 @@ class OfficialSchemaTests(unittest.IsolatedAsyncioTestCase):
                 for key, value in validated.items():
                     if isinstance(value, Template):
                         value.ensure_valid()
+                        if component == "switch" and key == "value_template":
+                            for locked, expected in [(True, "true"), (False, "false")]:
+                                self.assertEqual(expected, value.async_render_with_possible_json_value(
+                                    json.dumps({"locked": locked})))
+                            continue
                         property_name = value.template.split("value_json.")[1].split("}")[0]
                         self.assertEqual(str(state[property_name]),
                                          value.async_render_with_possible_json_value(json.dumps(state)))
                 checked += 1
-        self.assertEqual(126, checked)
+        self.assertEqual(156, checked)
 
     async def test_bad_configs_are_rejected(self):
         payload = next(payload for _, topic, _, payload in discovery_records() if "/climate/" in topic)

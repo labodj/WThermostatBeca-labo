@@ -93,6 +93,23 @@ const static char MQTT_HASS_AUTODISCOVERY_AIRCO[]         PROGMEM = R"=====(
 "modes":["heat","cool","fan_only","off"]
 }
 )=====";
+const static char MQTT_HASS_AUTODISCOVERY_KEYPAD[] PROGMEM = R"=====(
+{
+"name":"Keypad lock",
+"unique_id":"%s",
+"o":{"name":"WThermostatBeca","sw":"%s","url":"https://github.com/labodj/WThermostatBeca-labo"},
+"dev":{"ids":["%s"]},
+"~":"%s",
+"icon":"mdi:lock",
+"avty_mode":"all",
+"avty":[{"topic":"~/tele/LWT","payload_available":"Online","payload_not_available":"Offline"},
+        {"topic":"~/tele/mcu","payload_available":"Online","payload_not_available":"Offline"}],
+"cmd_t":"~/cmnd/things/thermostat/properties/locked",
+"stat_t":"~/stat/things/thermostat/properties",
+"val_tpl":"{{value_json.locked | lower}}",
+"pl_on":"true","pl_off":"false"
+}
+)=====";
 const static char MQTT_HASS_AUTODISCOVERY_SENSOR[]         PROGMEM = R"=====(
 {
 "name":"Temperature",
@@ -152,7 +169,7 @@ const static char MQTT_HASS_AUTODISCOVERY_SENSORIP[]         PROGMEM = R"=====(
 "dev":{"ids":["%s"]},
 "~":"%s",
 "avty_t":"~/tele/LWT","pl_avail":"Online","pl_not_avail":"Offline",
-"stat_t":"~/stat/things/thermostat/properties",
+"stat_t":"~/stat/things/network/properties",
 "val_tpl":"{{value_json.ip}}",
 "icon":"mdi:ip-network"
 }
@@ -1482,20 +1499,21 @@ public:
         }
         sent = publishConfig("climate", id) && sent;
 
-        struct Sensor { const char* suffix; PGM_P format; };
-        const Sensor sensors[] = {
-            {"_sensor", MQTT_HASS_AUTODISCOVERY_SENSOR},
-            {"_floorsensor", heating && floorSensor->getBoolean() ? MQTT_HASS_AUTODISCOVERY_SENSORFLOOR : nullptr},
-            {"_rssi", MQTT_HASS_AUTODISCOVERY_SENSORRSSI},
-            {"_ip", MQTT_HASS_AUTODISCOVERY_SENSORIP}
+        struct Entity { const char* component; const char* suffix; PGM_P format; };
+        const Entity entities[] = {
+            {"sensor", "_sensor", MQTT_HASS_AUTODISCOVERY_SENSOR},
+            {"sensor", "_floorsensor", heating && floorSensor->getBoolean() ? MQTT_HASS_AUTODISCOVERY_SENSORFLOOR : nullptr},
+            {"sensor", "_rssi", MQTT_HASS_AUTODISCOVERY_SENSORRSSI},
+            {"sensor", "_ip", MQTT_HASS_AUTODISCOVERY_SENSORIP},
+            {"switch", "_keypad_lock", MQTT_HASS_AUTODISCOVERY_KEYPAD}
         };
-        for (const auto& sensor : sensors) {
+        for (const auto& entity : entities) {
             buffer.flush();
-            id = discoveryId(sensor.suffix);
-            if (!removeDiscovery && sensor.format &&
-                !writeDiscoveryTemplate(buffer, sensor.format,
+            id = discoveryId(entity.suffix);
+            if (!removeDiscovery && entity.format &&
+                !writeDiscoveryTemplate(buffer, entity.format,
                     {id.c_str(), firmware.c_str(), mac.c_str(), network->getMqttTopic()})) return false;
-            sent = publishConfig("sensor", id) && sent;
+            sent = publishConfig(entity.component, id) && sent;
         }
 		return sent;
 	}

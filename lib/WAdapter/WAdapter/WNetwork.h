@@ -453,19 +453,23 @@ public:
 	}
 
     void requestHassDiscovery() {
-        if (!isSupportingMqttHASS()) return;
+        if (!isSupportingMqttHASS() || hassDiscoveryPending) return;
+        hassDiscoveryDelay = 1000 + os_random() % 2001;
         hassDiscoveryPending = true;
         hassStatePending = false;
         hassDiscoveryRequestedAt = millis();
     }
 
     void serviceHassDiscovery(unsigned long now) {
-        if (!isSupportingMqttHASS() || !isMqttConnected()) return;
-        if (now - hassDiscoveryRequestedAt < 1000UL) return;
+        if ((!hassDiscoveryPending && !hassStatePending) || !isSupportingMqttHASS() || !isMqttConnected()) return;
+        if (now - hassDiscoveryRequestedAt < hassDiscoveryDelay) return;
         if (hassDiscoveryPending) {
             if (sendMqttHassAutodiscover(false)) {
                 hassDiscoveryPending = false;
                 hassStatePending = true;
+                hassDiscoveryDelay = 1000;
+            } else {
+                hassDiscoveryDelay = hassDiscoveryDelay < 15000 ? 2 * hassDiscoveryDelay : 30000;
             }
             hassDiscoveryRequestedAt = now;
         } else if (hassStatePending) {
@@ -1343,6 +1347,7 @@ private:
 	unsigned long lastMqttConnect;
     unsigned long mqttRetryInterval = 0;
     unsigned long hassDiscoveryRequestedAt = 0;
+    uint16_t hassDiscoveryDelay = 1000;
     bool hassDiscoveryPending = false;
     bool hassStatePending = false;
 #endif
@@ -1887,9 +1892,6 @@ private:
             if (!valid) return;
             if (!saved) { request->send(500, CT_TEXT_PLAIN, "Failed to save device settings; changes not applied"); return; }
 			if (device->isConfigNeedsReboot()){
-#ifndef MINIMAL
-				if (device->isMainDevice()) sendMqttHassAutodiscover(true);
-#endif
 				wlog->notice(F("Reboot"));
 				this->restart(request, F("Device settings saved."));
 			} else {
