@@ -26,6 +26,7 @@ class BssidTests(unittest.TestCase):
         self.assertEqual(14, network_fields)
         source = r'''
 #define MINIMAL
+#define TEST_FORM_COPY_FAILURE
 #include "properties.h"
 #include "Stream.h"
 #include "lib/WAdapter/WAdapter/WStringProperty.h"
@@ -39,7 +40,10 @@ struct AsyncWebServerRequest{
     bool hasParam(const char* name,bool){return fields.count(name);}
     void send(int code,const char*,const char*){status=code;}
 };
-String getValueOrEmpty(AsyncWebServerRequest* request,const char* name){auto it=request->fields.find(name);return it==request->fields.end()?String(""):it->second;}
+const String& getValueOrEmpty(AsyncWebServerRequest* request,const char* name){
+    static const String empty;
+    auto it=request->fields.find(name);return it==request->fields.end()?empty:it->second;
+}
 struct IPAddress{byte octets[4]{};byte operator[](unsigned i){return octets[i];}
  bool fromString(const String& value){unsigned a,b,c,d;char tail;
  if(sscanf(value.c_str(),"%u.%u.%u.%u%c",&a,&b,&c,&d,&tail)!=4||a>255||b>255||c>255||d>255)return false;
@@ -56,12 +60,15 @@ struct Wifi{
         source += constants + r'''
 struct Probe{
     Print output;WLog log{0,0,&output};WLog*wlog=&log;
-    WSettings storage{&log,0xf1,false};WSettings*settings=&storage;
+    WSettings storage{&log,0xf1,false};WSettings*settings=&storage;WSettings*settingsOld=nullptr;
     WProperty*idx=nullptr,*ssid=nullptr,*mqttBaseTopic=nullptr;
     byte activeNetworkFlags=0;
     String extendedWifiPassword;
     WNetworkStrings networkStrings;
-    String removedIdx,removedTopic;unsigned removals=0;
+    String removedIdx,removedTopic,restartMessage;unsigned removals=0;
+    bool mqttConnected=true;
+    bool isSupportingMqtt(){return true;}bool isSupportingMqttHASS(){return true;}
+    bool isMqttConnected(){return mqttConnected;}
     bool sendMqttHassAutodiscover(bool remove){assert(remove);++removals;removedIdx=getIdx();removedTopic=getMqttTopic();return true;}
     uint8_t bssid[6]{};bool bssidLocked=false,restarted=false;
     Probe(bool minimal=false){settings->reallyReadSettings=false;
@@ -76,7 +83,7 @@ struct Probe{
     }
     const char*getSsid(){return ssid->c_str();}
     bool isWebServerRunning(){return true;}
-    void restart(AsyncWebServerRequest*,const __FlashStringHelper*){restarted=true;}
+    void restart(AsyncWebServerRequest*,const __FlashStringHelper*why){restarted=true;restartMessage=String(why);}
 '''
         for name in ['getIdx', 'getMqttUser', 'getMqttPassword', 'getMqttTopic', 'getPassword', 'migrateRecoverySettings', 'getBssid', 'parseBssid', 'connectWifi', 'loadBssid', 'saveBssid', 'isAuthenticationRequired', 'validStaticNetwork', 'handleHttpSave']:
             source += method(NETWORK, name) + '\n'
@@ -89,7 +96,36 @@ AsyncWebServerRequest request(){
     return r;
 }
 int main(){
+#ifdef MINIMAL
+    for (byte oldFlag : {STORED_FLAG_OLDLOW, STORED_FLAG_OLD, FLAG_OPTIONS_NETWORK_V1, FLAG_OPTIONS_NETWORK_V2}) {
+        EEPROM.bytes.fill(0x42);EEPROM.bytes[0]=oldFlag;
+        Probe bridge(true);WSettings legacy(&bridge.log,0xf1,true);bridge.settingsOld=&legacy;
+        const auto before=EEPROM.bytes;auto form=request();bridge.handleHttpSave(&form);
+        assert(form.status==409 && !bridge.restarted && EEPROM.bytes==before);
+    }
+    startAddressReadOffset=2;
+    for (byte appFlag : {byte(0xf0),byte(0xf1),byte(0xff)}) {
+        EEPROM.bytes.fill(0xa5);EEPROM.bytes[0]=FLAG_OPTIONS_NETWORK_CURRENT;EEPROM.bytes[1]=appFlag;
+        Probe bridge(true);auto form=request();bridge.handleHttpSave(&form);
+        assert(bridge.restarted && EEPROM.bytes[1]==appFlag);
+        assert(EEPROM.bytes[bridge.settings->getCurrentAddress()+2]==0xa5);
+    }
+#endif
     EEPROM.bytes.fill(0xff);Probe p;p.settings->save();const auto original=EEPROM.bytes;
+    for(const char* field:{"p","i","mu","mp","mt"}){
+        auto lowMemory=request();
+        const char* value="long-network-field-123456";
+        lowMemory.fields[field]=value;
+        const unsigned commits=EEPROM.commits;
+        String::failCopyOf=value;
+        p.handleHttpSave(&lowMemory);
+        String::failCopyOf=nullptr;
+        assert(lowMemory.status==503 && !p.restarted && EEPROM.commits==commits && EEPROM.bytes==original);
+    }
+#ifdef MINIMAL
+    WSettings afterBridge(&p.log,0xf1,false);
+    assert(afterBridge.getSettingsNetworkIsCurrent() && !afterBridge.getSettingsApplicationIsCurrent());
+#endif
     p.loadBssid();assert(!p.bssidLocked&&p.getBssid()=="");p.connectWifi();assert(!WiFi.locked&&WiFi.channel==0);
     uint8_t address[6]{};
     for(const char* good:{"02:11:22:33:44:55","aa:bb:cc:dd:ee:ff","00:00:00:00:00:01"})assert(Probe::parseBssid(good,address));
@@ -189,10 +225,21 @@ int main(){
     whole.fields["mu"]=String(std::string(32,'u'));whole.fields["mt"]=String(std::string(64,'t'));
     whole.fields["staticip"]="192.168.1.9";whole.fields["subnet"]="255.255.255.0";whole.fields["gateway"]="192.168.1.1";
     whole.fields["apfb"]="true";whole.fields["authModePresent"]="1";
-    const String previousIdx=p.getIdx(),previousTopic=p.getMqttTopic();
+    const String previousIdx=p.getIdx();
     commits=EEPROM.commits;p.handleHttpSave(&whole);assert(!whole.status&&EEPROM.commits==commits+1);
 #ifndef MINIMAL
-    assert(p.removedIdx==previousIdx&&p.removedTopic==previousTopic);
+    assert(p.removedIdx==previousIdx);
+    const unsigned afterRename=p.removals;
+    auto updated=whole;updated.fields["mt"]="different-base";p.handleHttpSave(&updated);
+    assert(!updated.status&&p.removals==afterRename);
+    p.handleHttpSave(&whole);assert(p.removals==afterRename);
+    auto disabled=whole;disabled.fields["mqhass"]="";p.handleHttpSave(&disabled);
+    assert(!disabled.status&&p.removals==afterRename+1&&p.removedIdx=="new-host");
+    p.handleHttpSave(&whole);
+    p.mqttConnected=false;
+    auto offline=whole;offline.fields["ms"]="new-broker";p.handleHttpSave(&offline);
+    assert(!offline.status&&p.removals==afterRename+1&&p.restartMessage.indexOf("previous broker")>=0);
+    p.mqttConnected=true;p.handleHttpSave(&whole);
 #endif
     const auto coherent=EEPROM.bytes;const String wifi=p.getPassword(),mqttSecret=p.getMqttPassword(),identity=p.getIdx();
     auto failure=whole;failure.status=0;failure.fields["i"]="failed-host";failure.fields["p"]=String(std::string(63,'x'));

@@ -584,7 +584,12 @@ private:
             address += item->value->getLength();
         }
         settingsFlash.write(0, FLAG_OPTIONS_NETWORK_CURRENT);
+#ifdef MINIMAL
+        // The bridge owns only network fields. Preserve the existing application version.
+        if (!_settingsNetworkIsCurrent) settingsFlash.write(1, 0xFF);
+#else
         settingsFlash.write(1, appSettingsFlag);
+#endif
         return true;
     }
 

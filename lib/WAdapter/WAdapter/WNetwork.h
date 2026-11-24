@@ -1769,9 +1769,17 @@ private:
 
 	void handleHttpSave(AsyncWebServerRequest *request) {
 		if (isWebServerRunning()) {
+#ifdef MINIMAL
+            // Migrating an old network layout can move the application fields that follow it.
+            if (!settings->getSettingsNetworkIsCurrent() && (settings->existsSettingsNetwork() ||
+                (settingsOld && settingsOld->existsSettingsNetwork()))) {
+                request->send(409, CT_TEXT_PLAIN, "Install the full firmware before changing legacy network settings.");
+                return;
+            }
+#endif
             const bool authenticationRequired = request->hasParam("authModePresent", true)
                 ? getValueOrEmpty(request, "authRequired") == "true" : isAuthenticationRequired();
-            const String bssidValue = getValueOrEmpty(request, "bssid");
+            const String& bssidValue = getValueOrEmpty(request, "bssid");
             uint8_t address[6]{};
             if (bssidValue.length() && !parseBssid(bssidValue, address)) {
                 request->send(400, CT_TEXT_PLAIN, "Invalid AP BSSID; use AA:BB:CC:DD:EE:FF or leave empty"); return;
@@ -1782,17 +1790,23 @@ private:
                 {"mp",PROP_MQTTPASSWORD},{"mt",PROP_MQTTTOPIC},
                 {"staticip",PROP_STATICIP},{"subnet",PROP_SUBNETMASK},{"gateway",PROP_GATEWAY},{"dns1",PROP_DNS1},{"dns2",PROP_DNS2}};
             for (const Field& field : fields) {
-                const String value = getValueOrEmpty(request, field.parameter);
+                const String& value = getValueOrEmpty(request, field.parameter);
                 const unsigned maximum = !strcmp(field.parameter, "p") || !strcmp(field.parameter, "mp") || !strcmp(field.parameter, "mt") ? 64U :
                     !strcmp(field.parameter, "i") || !strcmp(field.parameter, "mu") ? 32U : settings->getSetting(field.setting)->getLength();
                 if (!request->hasParam(field.parameter, true) || value.length() > maximum || strlen(value.c_str()) != value.length()) {
                     request->send(400, CT_TEXT_PLAIN, "Missing or oversized network setting"); return;
                 }
             }
-            const String port = getValueOrEmpty(request, "mo"), topic = getValueOrEmpty(request, "mt");
+            const String& port = getValueOrEmpty(request, "mo");
+            const String& topic = getValueOrEmpty(request, "mt");
             const bool keepPassword = request->hasParam("wifiPasswordMode", true)
                 ? getValueOrEmpty(request, "keepWifiPassword") == "true" : getValueOrEmpty(request, "p") == FORM_PW_NOCHANGE;
-            const String password = keepPassword ? String(getPassword()) : getValueOrEmpty(request, "p");
+            const String& submittedPassword = getValueOrEmpty(request, "p");
+            const char* wifiSecret = keepPassword ? getPassword() : submittedPassword.c_str();
+            const String password(wifiSecret);
+            if (password.length() != strlen(wifiSecret)) {
+                request->send(503, CT_TEXT_PLAIN, "Not enough memory to save network settings"); return;
+            }
             if (!keepPassword && !WWifiPassword::valid(password)) {
                 request->send(400, CT_TEXT_PLAIN, "WiFi password must be empty, 8-63 bytes, or 64 hexadecimal digits"); return;
             }
@@ -1810,7 +1824,7 @@ private:
                 }
                 IPAddress address;
                 for (const char* parameter : {"dns1", "dns2"}) {
-                    const String value = getValueOrEmpty(request, parameter);
+                    const String& value = getValueOrEmpty(request, parameter);
                     if (value.length() && !address.fromString(value)) {
                         request->send(400, CT_TEXT_PLAIN, "Invalid DNS address"); return;
                     }
@@ -1818,8 +1832,20 @@ private:
             }
             const bool keepMqttPassword = request->hasParam("mqttPasswordMode", true)
                 ? getValueOrEmpty(request, "keepMqttPassword") == "true" : getValueOrEmpty(request, "mp") == FORM_PW_NOCHANGE;
-            const String mqttPassword = keepMqttPassword ? String(getMqttPassword()) : getValueOrEmpty(request, "mp");
-            const String fullNetworkStrings[] = {getValueOrEmpty(request, "i"), getValueOrEmpty(request, "mu"), mqttPassword, topic};
+            const String& submittedMqttPassword = getValueOrEmpty(request, "mp");
+            const char* mqttSecret = keepMqttPassword ? getMqttPassword() : submittedMqttPassword.c_str();
+            const String& name = getValueOrEmpty(request, "i");
+            const String& user = getValueOrEmpty(request, "mu");
+            const String fullNetworkStrings[] = {name, user, String(mqttSecret), topic};
+            if (fullNetworkStrings[0].length() != name.length() || fullNetworkStrings[1].length() != user.length() ||
+                fullNetworkStrings[2].length() != strlen(mqttSecret) || fullNetworkStrings[3].length() != topic.length()) {
+                request->send(503, CT_TEXT_PLAIN, "Not enough memory to save network settings"); return;
+            }
+#ifndef MINIMAL
+            // The legacy identity field is at most 16 bytes. Keep it across the transaction.
+            char oldIdx[17];
+            strlcpy(oldIdx, idx->c_str(), sizeof(oldIdx));
+#endif
             if (!settings->beginUpdate(true)) {
                 request->send(503, CT_TEXT_PLAIN, "Settings storage unavailable; no changes saved"); return;
             }
@@ -1827,18 +1853,21 @@ private:
                 WWifiPassword::save(getValueOrEmpty(request, "s").c_str(), password, true) &&
                 (!request->hasParam("bssid", true) || saveBssid(address, bssidValue.length() != 0, true));
 #ifndef MINIMAL
-            const String oldIdx = idx->c_str(), oldTopic = mqttBaseTopic->c_str();
-            const byte oldNetworkBits = settings->getByte(PROP_NETBITS1);
+            // These changes retire the discovery topics on the currently connected broker.
+            // A base-topic or model change only updates the payload at the same discovery IDs.
+            const bool retireDiscovery = fullNetworkStrings[0] != getIdx() ||
+                getValueOrEmpty(request, "mq") != "true" || getValueOrEmpty(request, "mqhass") != "true" ||
+                getValueOrEmpty(request, "ms") != settings->getString(PROP_MQTTSERVER) ||
+                (port.length() ? number : 1883) != String(settings->getString(PROP_MQTTPORT)).toInt();
 #endif			
-			this->idx->setString(getValueOrEmpty(request, "i").c_str());
+			this->idx->setString(name.c_str());
 			this->ssid->setString(getValueOrEmpty(request, "s").c_str());
 			settings->setString(PROP_PASSWORD, password.c_str());
 			settings->setString(PROP_MQTTSERVER, getValueOrEmpty(request, "ms").c_str());
-			String mqtt_port = getValueOrEmpty(request, "mo");
-			settings->setString(PROP_MQTTPORT, (mqtt_port != "" ? mqtt_port.c_str() : "1883"));
-			settings->setString(PROP_MQTTUSER, getValueOrEmpty(request, "mu").c_str());
-			settings->setString(PROP_MQTTPASSWORD, mqttPassword.c_str());
-			this->mqttBaseTopic->setString(getValueOrEmpty(request, "mt").c_str());
+			settings->setString(PROP_MQTTPORT, port.length() ? port.c_str() : "1883");
+			settings->setString(PROP_MQTTUSER, user.c_str());
+			settings->setString(PROP_MQTTPASSWORD, fullNetworkStrings[2].c_str());
+			this->mqttBaseTopic->setString(topic.c_str());
 			byte nb1 = NETBITS1_RECOVERY_MIGRATED;
 			if (getValueOrEmpty(request, "mq").equals("true")) nb1 |= NETBITS1_MQTT;
 			if (getValueOrEmpty(request, "mqhass").equals("true")) nb1 |= NETBITS1_HASS;
@@ -1860,22 +1889,24 @@ private:
             if (!settings->endUpdate(extensionsStaged)) {
                 request->send(500, CT_TEXT_PLAIN, "Failed to save settings; changes not applied. Check storage before rebooting."); return;
             }
+            const __FlashStringHelper* savedMessage = F("Settings saved.");
 #ifndef MINIMAL
-            settings->writesEnabled = false;
-            // Discovery removal must use the previous identity, and only follow a successful save.
-            const String newIdx = idx->c_str(), newTopic = mqttBaseTopic->c_str();
-            idx->setString(oldIdx.c_str()); mqttBaseTopic->setString(oldTopic.c_str());
-            settings->setByte(PROP_NETBITS1, oldNetworkBits);
-            sendMqttHassAutodiscover(true);
-            idx->setString(newIdx.c_str()); mqttBaseTopic->setString(newTopic.c_str());
-            settings->setByte(PROP_NETBITS1, nb1);
-            settings->writesEnabled = true;
+            if (retireDiscovery && isSupportingMqtt() && isSupportingMqttHASS()) {
+                // Extended names stay cached until loadAndMigrate below. Restore the legacy
+                // field temporarily for short names. Active MQTT flags still describe this session.
+                settings->writesEnabled = false;
+                idx->setString(oldIdx);
+                if (!isMqttConnected() || !sendMqttHassAutodiscover(true))
+                    savedMessage = F("Settings saved. Could not clear old Home Assistant discovery. Check retained configs on the previous broker.");
+                idx->setString(fullNetworkStrings[0].c_str());
+                settings->writesEnabled = true;
+            }
 #endif
             extendedWifiPassword = password.length() > 32 ? password : String();
             const char* legacyStrings[] = {idx->c_str(), settings->getString(PROP_MQTTUSER), settings->getString(PROP_MQTTPASSWORD), mqttBaseTopic->c_str()};
             networkStrings.loadAndMigrate(legacyStrings, nullptr);
 
-			this->restart(request, F("Settings saved."));
+			this->restart(request, savedMessage);
 			// we must not here this->supportingMqtt -> if it _was_ disabled and we're going to enable it here
 			// mqtt would not be initialized but would be used immediately
 		}

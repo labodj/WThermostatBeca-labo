@@ -274,7 +274,7 @@ If you upgrade from Klaus Ahrenbergs WThermostat all network settings will be ke
 
 ### Not Enough Space
 
-If you get 'Not Enough Space' while Upgrading you can flash a lite-version called ``wthermostat-minimal-1.xx-fas.bin`` - then do WiFi-Configuration of Thermostat and after this flash the full-version.
+If the normal firmware does not fit, upload the minimal image first, then upload the normal image from the same release. The minimal image can save Wi-Fi settings on a fresh device or with the current network layout. If it reports that legacy network settings need migration, upload the normal image before changing those settings. The normal image migrates the thermostat and network settings together.
 
 ### Back to tasmota
 

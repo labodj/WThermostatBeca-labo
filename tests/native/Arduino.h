@@ -35,6 +35,18 @@ template<class T, class L, class H> T constrain(T value,L low,H high) { return s
 class String : public std::string {
 public:
     using std::string::string;
+#ifdef TEST_FORM_COPY_FAILURE
+    // The ESP8266 core resets a String to empty when allocating its copy fails.
+    inline static const char* failCopyOf = nullptr;
+    String() = default;
+    String(const char* text) : std::string(failCopyOf && !strcmp(text, failCopyOf) ? "" : text) {}
+    String(const String& other) : String(other.c_str(), other.size()) {
+        if (failCopyOf && other == failCopyOf) clear();
+    }
+    String(String&&) = default;
+    String& operator=(const String&) = default;
+    String& operator=(String&&) = default;
+#endif
     String(char value):std::string(1,value){}
     int indexOf(char value, size_t start=0) const {auto p=find(value,start);return p==npos?-1:static_cast<int>(p);}
     String(std::string value) : std::string(value) {}

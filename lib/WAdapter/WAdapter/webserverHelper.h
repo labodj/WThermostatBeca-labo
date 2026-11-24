@@ -4,10 +4,10 @@
 
 #include <ESPAsyncWebServer.h>
 
-String getValueOrEmpty(AsyncWebServerRequest* request, const char * p){
-    if (request->hasParam(p, true)) return request->getParam(p, true)->value();
-    if (!request->hasParam(p)) return String("");
-    else return request->getParam(p)->value();
+const String& getValueOrEmpty(AsyncWebServerRequest* request, const char* name) {
+    const auto* parameter = request->getParam(name, true);
+    if (!parameter) parameter = request->getParam(name);
+    return parameter ? parameter->value() : emptyString;
 }
 
 

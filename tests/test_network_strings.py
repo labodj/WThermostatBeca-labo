@@ -44,7 +44,6 @@ int main(){
         constants = text[text.index('const byte NETBITS1_MQTT'):text.index('\n#ifdef DEBUG', text.index('const byte NETBITS1_MQTT'))]
         constants += '\n' + '\n'.join(line for line in text.splitlines() if line.startswith('const char* DEFAULT_TOPIC_'))
         source = r'''
-#define MINIMAL
 #include "properties.h"
 #include "Stream.h"
 #include "lib/WAdapter/WAdapter/WStringProperty.h"
@@ -61,6 +60,7 @@ struct Probe{
   assert(loadSettings()==expected);}
  ~Probe(){delete settingsOld;delete settings;}
  String getClientName(bool){return "default-room";}String getMacAddress(){return "AA:BB:CC:DD:EE:FF";}
+ std::nullptr_t mqttClient=nullptr;void disconnectMqtt(){assert(false);}
  bool isSupportingWebThing(){return true;}
  void deleteSettingsOld(){delete settingsOld;settingsOld=nullptr;}
 '''
