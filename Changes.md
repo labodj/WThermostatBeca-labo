@@ -2,6 +2,13 @@
 
 Entries run from newest to oldest. The Labo fork starts at 1.24. Downloadable builds and their original release notes are listed on [GitHub Releases](https://github.com/labodj/WThermostatBeca-labo/releases).
 
+## Version 1.27.10
+
+* Open Network Configuration with Live WebLog running on a tighter heap. The page checks space as it grows and gives a readable retry message when the transport needs the remaining memory.
+* Keep network settings intact if a form copy fails. Recheck device programs when the first controller report is lost. Handle WebLog client teardown and web server restarts safely.
+* Add Home Assistant keypad lock discovery, stagger discovery on reconnect and retry failed publications with backoff. Keep the login retry delay when Wi-Fi reconnects after rejected broker credentials.
+* Check release images, their variants and their checksums before publishing the firmware package.
+
 ## Version 1.27.9
 
 * Read a single MQTT property with an empty command payload. Direct requests for available values receive both the documented reply and the historical short reply. A sensor that has not supplied a reading no longer publishes a placeholder as its value.
