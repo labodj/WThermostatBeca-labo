@@ -549,8 +549,6 @@ public:
 		if (this->statusLedPin != NO_LED) {
 			statusLed = new WLed(statusLedPin);
 			statusLed->setOn(true, 500);
-		} else {
-			statusLed = nullptr;
 		}
 
 
@@ -584,9 +582,9 @@ public:
 
 	void stopWebServer() {
 		if (this->updateRunning) return;
-		initWebserverDeinitHooks(webServer);
-		delay(100);
-		if ((isWebServerRunning())) {
+		if (isWebServerRunning()) {
+			initWebserverDeinitHooks(webServer);
+			delay(100);
 			wlog->notice(F("stopWebServer"));
 			webServer->end();
 			this->notify(false);
@@ -595,8 +593,6 @@ public:
 #ifndef MINIMAL
 		disconnectMqtt();
 #endif
-		wlog->notice(F("kill"));
-		webServer->end();
 		if (onConfigurationFinished) {
 			onConfigurationFinished();
 		}
@@ -1361,7 +1357,7 @@ private:
     String extendedWifiPassword;
 	WProperty *idx;
 	unsigned long lastWifiConnect;
-	WLed *statusLed;
+	WLed *statusLed = nullptr;
 	int statusLedPin;
 	WSettings *settings;
 	WSettings *settingsOld;

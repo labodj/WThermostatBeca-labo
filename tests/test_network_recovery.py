@@ -7,6 +7,36 @@ from native_support import NETWORK, method
 class NetworkRecoveryTests(unittest.TestCase):
     compile_run = native.NativeTests.compile_run
 
+    def test_server_cleanup_with_and_without_an_active_listener(self):
+        source = r'''
+#include "Arduino.h"
+struct Listener { int stops=0; void end(){++stops;} };
+struct Log { void notice(const __FlashStringHelper*){} };
+struct Probe {
+ Listener* webServer=nullptr; Log log; Log* wlog=&log;
+ int hooks=0, notices=0, dns=0, mqtt=0, finished=0;
+ std::function<void()> onConfigurationFinished=[this]{++finished;};
+ bool updateRunning=false;
+ bool isWebServerRunning(){return webServer!=nullptr;}
+ void initWebserverDeinitHooks(Listener* active){assert(active);++hooks;}
+ void notify(bool){++notices;}
+ void deleteDnsApServer(){++dns;}
+ void disconnectMqtt(){++mqtt;}
+''' + method(NETWORK, 'stopWebServer') + r'''
+};
+int main(){
+ for(bool active:{false,true}){
+  Probe p;Listener listener;if(active)p.webServer=&listener;
+  p.updateRunning=true;p.stopWebServer();
+  assert(!listener.stops && !p.hooks && !p.dns && !p.mqtt && !p.finished);
+  p.updateRunning=false;p.stopWebServer();
+  assert(listener.stops==active && p.hooks==active && p.notices==active);
+  assert(p.dns==1 && p.mqtt==1 && p.finished==1);
+ }
+}
+'''
+        self.compile_run(source, 'server_cleanup')
+
     def test_digest_challenge_charset_and_failed_randomness(self):
         source = r'''
 #include "Arduino.h"

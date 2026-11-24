@@ -7,7 +7,8 @@ class WebLogStatusTests(unittest.TestCase):
     compile_run = native.NativeTests.compile_run
 
     def test_silent_and_enabled_levels_report_their_actual_status(self):
-        handler = native.method(native.ROOT / "WThermostat/WLogDevice.h", "wsOnEvent")
+        device = native.ROOT / "WThermostat/WLogDevice.h"
+        handler = "\n".join(native.method(device, name) for name in ("wsOnEvent", "setMinLogLevel", "loop"))
         self.compile_run(r'''
 #include "Arduino.h"
 #include <cstdarg>
@@ -15,7 +16,16 @@ class WebLogStatusTests(unittest.TestCase):
 constexpr unsigned LOG_LEVEL_SILENT=0;
 constexpr int WS_CONNECTED=1;
 enum AwsEventType {WS_EVT_CONNECT,WS_EVT_DATA,WS_EVT_DISCONNECT};
-struct AsyncWebSocket {};
+struct AsyncWebSocket {
+    unsigned clients=0;
+    unsigned count(){return clients;}
+    void cleanupClients(){}
+} wslog;
+struct Network {
+    int level=0;
+    Network* log(){return this;}
+    void setLevelNetwork(int n){level=n;}
+};
 struct AsyncWebSocketClient {
     int state=WS_CONNECTED;bool writable=true;unsigned pings=0;std::string wire;
     int status(){return state;} bool canSend(){return writable;} unsigned id(){return 7;}
@@ -28,6 +38,9 @@ struct AsyncWebSocketClient {
 };
 struct Property {const char*value;const char*c_str(){return value;}};
 struct Log {
+    Network net;Network* network=&net;
+    bool webClientsChanged=false;
+    unsigned getlogLevelByte(){return 0;}
     unsigned level=0;Property property{"silent"};Property*logLevelWeb=&property;
     unsigned getlogLevelWebByte(){return level;}
 ''' + handler + r'''
@@ -37,6 +50,8 @@ int main(){
     for(unsigned level=0;level<7;++level){
         Log log;log.level=level;log.property.value=levels[level];AsyncWebSocketClient client;
         log.wsOnEvent(nullptr,&client,WS_EVT_CONNECT,nullptr,nullptr,0);
+        assert(log.webClientsChanged);
+        wslog.clients=2;log.loop(50);assert(!log.webClientsChanged && log.net.level==int(level));
         assert(client.wire.find("Hello WebSocket Client #7")!=std::string::npos);
         if(level==0){
             assert(client.wire.find("Web logging is disabled.")!=std::string::npos);
@@ -47,7 +62,11 @@ int main(){
         }
         assert(client.pings==1);auto greeting=client.wire;
         log.wsOnEvent(nullptr,&client,WS_EVT_DATA,nullptr,nullptr,0);
-        assert(client.pings==2&&client.wire==greeting);
+        assert(client.pings==2&&client.wire==greeting&&!log.webClientsChanged);
+        log.wsOnEvent(nullptr,&client,WS_EVT_DISCONNECT,nullptr,nullptr,0);assert(log.webClientsChanged);
+        wslog.clients=1;log.loop(100);assert(log.net.level==int(level));
+        log.wsOnEvent(nullptr,&client,WS_EVT_DISCONNECT,nullptr,nullptr,0);
+        wslog.clients=0;log.loop(150);assert(log.net.level==0 && !log.webClientsChanged);
         log.wsOnEvent(nullptr,nullptr,WS_EVT_CONNECT,nullptr,nullptr,0);
         client.state=0;log.wsOnEvent(nullptr,&client,WS_EVT_CONNECT,nullptr,nullptr,0);
         assert(client.pings==2&&client.wire==greeting);

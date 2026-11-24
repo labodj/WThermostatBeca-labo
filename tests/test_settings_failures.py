@@ -102,6 +102,7 @@ int main(){
 """
             + modes
             + r"""
+struct {int count(){return 1;}} wslog;
 struct Net{Print output;WLog logger{0,0,&output};WLog*log(){return &logger;}};
 struct Probe{
  Net net;Net*network=&net;WSettings settings{net.log(),0xf1,false};
@@ -173,6 +174,7 @@ int main(){
                            if line.startswith("#define LOG_LEVEL_"))
         modes = text[text.index("const char* LOG_MODE_SILENT"):text.index("const char* URI_WSLOG")]
         source = '#include "properties.h"\n' + levels + "\n" + modes + r'''
+struct {int clients=1;int count(){return clients;}} wslog;
 struct Log{int level=0;void setLevelNetwork(int value){level=value;}};
 struct Net{Log output;Log*log(){return &output;}};
 struct Probe{
@@ -196,6 +198,7 @@ int main(){
     mode.setString("invalid");p.onlogLevelMqttChange(&mode);p.onlogLevelWebChange(&mode);
     assert(p.mqtt==0&&p.web==0&&!strcmp(p.logLevelByteToString(255),"silent"));
     p.mqtt=2;p.web=6;p.setMinLogLevel();assert(p.net.output.level==6);
+    wslog.clients=0;p.setMinLogLevel();assert(p.net.output.level==2);
     p.mqtt=5;p.web=1;p.setMinLogLevel();assert(p.net.output.level==5);
     puts("PASS all log levels, channel routing and silent defaults");
 }

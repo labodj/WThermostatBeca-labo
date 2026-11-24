@@ -226,6 +226,10 @@ public:
 
     void loop(unsigned long now) override {
 		wslog.cleanupClients();
+        if (webClientsChanged) {
+            webClientsChanged = false;
+            setMinLogLevel();
+        }
     }
 
     void handleUnknownMqttCallback(const String&, const String&, const String&, unsigned int) override {}
@@ -252,7 +256,7 @@ public:
 	void setMinLogLevel(){
 		int toSet=LOG_LEVEL_SILENT;
 		if (getlogLevelByte() > toSet) toSet=getlogLevelByte();
-		if (getlogLevelWebByte() > toSet) toSet=getlogLevelWebByte();
+		if (wslog.count() && getlogLevelWebByte() > toSet) toSet=getlogLevelWebByte();
 		network->log()->setLevelNetwork(toSet);
 
 	}
@@ -306,18 +310,17 @@ public:
             ESP.getMaxFreeBlockSize() >= 8192U && wslog.availableForWriteAll()){
 			wslog.printfAll(PSTR("%s: %s"), logLevelByteToString(level), message);
 		}
-		if (level<=getlogLevelByte()){
-			String t = (String)network->getMqttTopic()+ "/" + MQTT_TELE +"/log" ;
-			//network->log()->verbose(F("sendLog (%s)"), t.c_str());
-			if (network->isMqttConnected()){
-				network->publishMqtt(t.c_str(), ((String)logLevelByteToString(level)+": "+message).c_str());
-			}
-		}
+        if (level <= getlogLevelByte() && network->isMqttConnected()) {
+            String topic = String(network->getMqttTopic()) + "/" + MQTT_TELE + "/log";
+            network->publishMqtt(topic.c_str(), (String(logLevelByteToString(level)) + ": " + message).c_str());
+        }
 	};
 
 	
 
     void wsOnEvent(AsyncWebSocket*, AsyncWebSocketClient* client, AwsEventType type, void*, uint8_t*, size_t) {
+        // The disconnect callback runs during client destruction. Count clients in loop().
+        if (type == WS_EVT_CONNECT || type == WS_EVT_DISCONNECT) webClientsChanged = true;
         if (!client || client->status() != WS_CONNECTED || !client->canSend()) return;
         if (type == WS_EVT_CONNECT) {
             client->printf(PSTR("Hello WebSocket Client #%u\n"), client->id());
@@ -345,6 +348,7 @@ void webserverDeinitHook(AsyncWebServer *webServer) override {
 }
 
 private:
+    bool webClientsChanged = false;
 	WProperty* logLevel;
 	WProperty* logLevelByte;
 	WProperty* logLevelWeb;
