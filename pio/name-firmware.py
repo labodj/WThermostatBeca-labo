@@ -1,29 +1,9 @@
 import os
 import shutil
-try:
-    import configparser
-except ImportError:
-    import ConfigParser as configparser
 
-# PlatformIO/SCons injects Import and the requested construction environments.
-Import("env", "projenv")
+Import("env")
 
-# Dump construction environments (for debug purpose)
-#print(env.Dump())
-#print(projenv.Dump())
-
-print("name-firmware init")
-config = configparser.ConfigParser()
-config.read("platformio.ini")
-appversion = config.get("common", "appversion")
-
-if os.path.exists('platformio_override.ini'):
-    config = configparser.ConfigParser()
-    config.read("platformio_override.ini")
-    appversion2 = config.get("common", "appversion", fallback=None)
-    if appversion2:
-        appversion = appversion2
-
+appversion = env.GetProjectConfig().get("common", "appversion")
 print("name-firmware to {}".format(appversion))
 
 OUTPUT_DIR = "build_output{}".format(os.path.sep)

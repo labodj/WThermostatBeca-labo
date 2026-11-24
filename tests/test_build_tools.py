@@ -1,5 +1,8 @@
 import contextlib
 import io
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -24,6 +27,13 @@ class BuildToolsTests(unittest.TestCase):
 
     def test_firmware_artifact_names_and_debug_symbols(self):
         class Environment:
+            def GetProjectConfig(self):
+                return self
+
+            def get(self, section, name):
+                self_outer.assertEqual(("common", "appversion"), (section, name))
+                return "custom-build"
+
             def subst(self, value):
                 self_outer.assertEqual("$PIOENV", value)
                 return "wthermostat"
@@ -42,10 +52,38 @@ class BuildToolsTests(unittest.TestCase):
             (build / "firmware.elf").write_bytes(b"symbols")
             Path("firmware.map").write_text("map")
             namespace["bin_map_copy"]([], [build / "firmware.bin"], namespace["env"])
-            name = "wthermostat-" + namespace["appversion"]
+            name = "wthermostat-custom-build"
             self.assertEqual(b"binary", Path("build_output/firmware", name + ".bin").read_bytes())
             self.assertEqual(b"symbols", Path("build_output/map", name + ".elf").read_bytes())
             self.assertEqual("map", Path("build_output/map", name + ".map").read_text())
+
+    def test_optimized_packaging_rejects_dirty_sources_and_damaged_images(self):
+        with tempfile.TemporaryDirectory() as temp:
+            caller = Path(temp)
+            project = caller / "project"
+            subprocess.run(["git", "init", "-q", str(project)], check=True)
+            (project / ".git/info/exclude").write_text("/pio/\n/platformio.ini\n/build_output/\n")
+            script = project / "pio/package.py"
+            script.parent.mkdir()
+            shutil.copyfile(ROOT / "pio/package.py", script)
+            shutil.copyfile(ROOT / "platformio.ini", project / "platformio.ini")
+            images = project / "build_output/firmware"
+            images.mkdir(parents=True)
+            data = bytearray(4200)
+            data[:4] = bytes([0xe9, 2, 3, 0x20])
+            data[4096:4100] = bytes([0xe9, 5, 3, 0x20])
+            data[48:53] = b"\0dev\0"
+            (images / "wthermostat-dev.bin").write_bytes(data)
+            dirty = project / "unfinished.cpp"
+            dirty.touch()
+            command = [sys.executable, "-O", str(script), "dev", "--output", "release"]
+            for message in ("Commit sources before packaging", "Arduino CRC/size mismatch"):
+                result = subprocess.run(command, cwd=caller, capture_output=True, text=True)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(message, result.stderr)
+                self.assertFalse((caller / "release").exists())
+                self.assertEqual([], list(caller.glob(".wthermostat-*")))
+                dirty.unlink(missing_ok=True)
 
     def test_ci_tag_version_matches_local_firmware_version(self):
         import os
