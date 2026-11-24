@@ -808,6 +808,11 @@ public:
 		// to tasks only every second
 		if (now - lastLongLoop >= 1000){
 			updateCurrentSchedulePeriod();
+            // The six status reports can arrive even when the separate schedule frame was lost.
+            if (mcuInitialized && !receivedSchedules() && now - lastMcuAttempt >= 60000UL) {
+                lastMcuAttempt = now;
+                queryAllDPs();
+            }
             if (!lastScheduleNotify && now >= MINIMUM_INTERVAL && network->isMqttConnected() &&
                 receivedSchedules() && sendSchedulesToMqtt()) lastScheduleNotify = now;
 			lastLongLoop=now;
@@ -1002,42 +1007,33 @@ public:
     void handleUnknownMqttCallback(const String& stat_topic, const String& partialTopic, const String& payload, unsigned int length) override {
 		network->log()->notice(F("handleUnknownMqttCallback %s|%s|%s" ), stat_topic.c_str(), partialTopic.c_str(), payload.c_str());
 		// {"log":"handleUnknownMqttCallback home/test/stat/things/thermostat/properties / schedules / "}
-    	if (partialTopic.startsWith(SCHEDULES)) {
+        if (partialTopic == SCHEDULES || partialTopic == "schedules/") {
             if (!receivedSchedules()) return;
-		const String scheduleTopic = partialTopic.substring(SCHEDULES.length() + 1);
-		if (scheduleTopic.equals("")) {
-				if (length == 0) {
-					//Send actual schedules
-					network->log()->notice(PSTR("Empty payload for schedules -> send schedules..."));
-				} else {
-					//Set schedules
-					network->log()->notice(PSTR("Payload for schedules -> set and send schedules..."));
-                    WJsonParser parser;
-                    byte previous[sizeof(schedules)];
-                    memcpy(previous, schedules, sizeof(schedules));
+            if (length) {
+                network->log()->notice(PSTR("Payload for schedules -> set and send schedules..."));
+                WJsonParser parser;
+                byte previous[sizeof(schedules)];
+                memcpy(previous, schedules, sizeof(schedules));
+                schedulesChanged = false;
+                const bool valid = parser.parse(payload.c_str(),
+                    [this](const char* key, const char* value) { processSchedulesKeyValue(key, value); },
+                    [this](const char* key, const char* value) { return validSchedulesKeyValue(key, value); });
+                if (!valid || !validSchedulesOrder()) {
+                    memcpy(schedules, previous, sizeof(schedules));
                     schedulesChanged = false;
-                    const bool valid = parser.parse(payload.c_str(),
-                        [this](const char* key, const char* value) { processSchedulesKeyValue(key, value); },
-                        [this](const char* key, const char* value) { return validSchedulesKeyValue(key, value); });
-                    if (!valid || !validSchedulesOrder()) {
-                        memcpy(schedules, previous, sizeof(schedules));
-                        schedulesChanged = false;
-                        network->log()->warning(F("Invalid schedule command ignored"));
-                        return;
-                    }
-					if (schedulesChanged) {
-						network->log()->notice(PSTR("Some schedules changed. Write to MCU..."));
-						this->schedulesToMcu();
-					} else {
-						network->log()->notice(PSTR("No schedules changed."));
-					}
-				}
-				sendSchedulesToMqtt();
-    		} else {
-    			//There are still some more topics after properties
-    			network->log()->warning(PSTR("Longer topic for schedules -> not supported yet..."));
-
-    		}
+                    network->log()->warning(F("Invalid schedule command ignored"));
+                    return;
+                }
+                if (schedulesChanged) {
+                    network->log()->notice(PSTR("Some schedules changed. Write to MCU..."));
+                    schedulesToMcu();
+                } else {
+                    network->log()->notice(PSTR("No schedules changed."));
+                }
+            } else {
+                network->log()->notice(PSTR("Empty payload for schedules -> send schedules..."));
+            }
+            sendSchedulesToMqtt();
     	} else if (partialTopic.equals(MCUCOMMAND)) {
 			//send to MCU
 			network->log()->notice(PSTR("Received %s: %s"), MCUCOMMAND.c_str(), payload.c_str());
@@ -1048,7 +1044,7 @@ public:
 		} else if (partialTopic.equals("wififallback")) {
 			network->log()->notice(PSTR("setDesiredModeAp"));
 			network->setDesiredModeFallback();
-		} else if (partialTopic.equals("wfistation")) {
+		} else if (partialTopic.equals("wifistation") || partialTopic.equals("wfistation")) {
 			network->log()->notice(PSTR("setDesiredModeStation"));
 			network->setDesiredModeStation();
 		}

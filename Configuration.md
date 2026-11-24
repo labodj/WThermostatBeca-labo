@@ -34,6 +34,8 @@ Administrator login uses expiring, boot-local Digest challenges with request-tar
 
 ### Resync thermostat
 
+If the controller's schedule report is lost at startup, the ESP requests it again once per minute until it arrives, even while Wi-Fi or MQTT is offline. The schedules page accepts edits once it has received the program.
+
 **Resync thermostat** in Home or Live WebLog opens a confirmation page. It restarts communication with the thermostat controller and requests its current state; it does not restart the ESP8266 or erase Wi-Fi, MQTT, thermostat settings or schedules. **Cancel** returns Home without starting the operation. Only **Confirm resync** submits the action.
 
 For integrations, `GET /thermostat_reinit` and a legacy `POST /thermostat_reinit` only display the confirmation. Execution requires `POST /save_thermostat_reinit` with `confirm=1` in the form body, under the existing authentication and CSRF policy. GET, a missing/invalid confirmation, or a query-string confirmation alone does not execute it.

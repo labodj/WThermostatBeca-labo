@@ -68,7 +68,10 @@ int main(){Probe p;Request unavailable;p.sendSchedules(&unavailable);
 constexpr unsigned MINIMUM_INTERVAL = 2000;
 struct Probe {
     Probe* network = this;
-    uint32_t lastLongLoop = 0, lastScheduleNotify = 0;
+    uint32_t lastLongLoop = 0, lastScheduleNotify = 0, lastMcuAttempt = 0;
+    bool mcuInitialized = false;
+    unsigned queries = 0;
+    void queryAllDPs() { ++queries; }
     unsigned attempts = 0, updates = 0;
     bool connected = true, ready = false, succeeds = false;
     bool isMqttConnected() { return connected; }
@@ -92,6 +95,23 @@ int main() {
     p.connected = p.succeeds = true;
     p.tick(7000); p.tick(8000);
     assert(p.attempts == 4 && p.lastScheduleNotify == 7000);
+    Probe missing;
+    missing.connected = false;
+    missing.tick(60000);
+    assert(missing.queries == 0);
+    missing.mcuInitialized = true;
+    missing.lastMcuAttempt = UINT32_MAX - 29999;
+    missing.lastLongLoop = 28000;
+    missing.tick(29000);
+    assert(missing.queries == 0);
+    missing.tick(30000);
+    missing.tick(89000);
+    assert(missing.queries == 1 && !missing.attempts);
+    missing.tick(90000);
+    assert(missing.queries == 2);
+    missing.ready = true;
+    missing.tick(150000);
+    assert(missing.queries == 2);
 }
 '''
         self.compile_run(source, 'schedule_retry_rate')
@@ -120,7 +140,7 @@ const String SCHEDULES="schedules",MCUCOMMAND="mcucommand";const int MODEL_BAC_0
 struct AsyncWebServerRequest{};
 String getValueOrEmpty(AsyncWebServerRequest*,const char*key){return key[2]=='h'?"06:00":"20";}
 struct Log{template<class...T>void notice(T...){}template<class...T>void warning(T...){}};
-struct Net{Log logger;Log*log(){return &logger;}void setDesiredModeAp(){}void setDesiredModeFallback(){}void setDesiredModeStation(){}};
+struct Net{Log logger;Log*log(){return &logger;}unsigned stationRequests=0;void setDesiredModeAp(){}void setDesiredModeFallback(){}void setDesiredModeStation(){++stationRequests;}};
 struct Probe{Net net;Net*network=&net;bool ready=false,schedulesChanged=false;byte schedules[54]{};
  unsigned writes=0,replies=0;WPage page{"schedules","Schedules"};
  bool receivedSchedules(){return ready;}int getThermostatModel(){return 0;}double getTemperatureFactor(){return 2;}
@@ -136,7 +156,12 @@ int main(){Probe p;p.install();AsyncWebServerRequest request;Print sink;WChecked
  assert(p.writes==0&&p.replies==0);for(byte value:p.schedules)assert(value==0);
  p.ready=true;p.page.submittedPage(&request,&output);assert(p.writes==1&&p.schedules[2]==40);
  p.handleUnknownMqttCallback("reply","schedules/","{\"w1t\":21}",10);
- assert(p.writes==2&&p.replies==1&&p.schedules[2]==42);}
+ assert(p.writes==2&&p.replies==1&&p.schedules[2]==42);
+ for(const char* other:{"schedules2","schedules/workday"})p.handleUnknownMqttCallback("reply",other,"",0);
+ assert(p.replies==1 && p.writes==2);
+ p.handleUnknownMqttCallback("reply","schedules","",0);assert(p.replies==2 && p.writes==2);
+ for(const char* topic:{"wifistation","wfistation"})p.handleUnknownMqttCallback("reply",topic,"",0);
+ assert(p.net.stationRequests==2);}
 '''
         self.compile_run(source, 'schedule_write_readiness')
 
