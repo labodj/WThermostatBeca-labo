@@ -1703,9 +1703,8 @@ private:
 			// resetWifiTimeout
 			if (wifiModeRunning == wnWifiMode_t::WIFIMODE_FALLBACK) this->apStartedAt=millis();
             if (recoveryApActive && request->client() && request->client()->localIP() == WiFi.softAPIP()) recoveryApStartedAt = millis();
-			wlog->notice(F("Network config page"));
-            // Avoid cbuf's copy-before-free growth for the complete network form.
-			WCheckedPrint* page = httpHeader(request, F("Network Configuration"), nullptr, 6144U);
+            // Actual form size varies with the settings. Each additional block checks the transport reserve.
+            WCheckedPrint* page = httpHeader(request, F("Network Configuration"), nullptr, 4096U);
             if (!page) return;
 			printHttpCaption(page);
             page->format(HTTP_CONFIG_PAGE_BEGIN, ID_NETWORK, getCsrfToken());
@@ -2082,12 +2081,16 @@ private:
         request->removeHeaders();
         // Page blocks need total capacity, not one contiguous allocation for the whole page.
         const size_t freeHeap = ESP.getFreeHeap();
-        const size_t reserve = 8192U;
-        if (ESP.getMaxFreeBlockSize() < 1024U || freeHeap < reserve || bufferSize > freeHeap - reserve) { request->send(503); return nullptr; }
+        const size_t reserve = WPageResponse::transportReserve;
+        auto busy = [request]() -> WCheckedPrint* {
+            request->send(503, "text/plain", "Device busy. Close Live WebLog or another device tab and reload this page.");
+            return nullptr;
+        };
+        if (ESP.getMaxFreeBlockSize() < 1024U || freeHeap < reserve || bufferSize > freeHeap - reserve) return busy();
         WPageResponse* const response = new (std::nothrow) WPageResponse(CT_TEXT_HTML);
-        if (!response) { request->send(503); return nullptr; }
+        if (!response) return busy();
         WCheckedPrint* const page = new (std::nothrow) WCheckedPrint(response);
-        if (!page) { delete response; request->send(503); return nullptr; }
+        if (!page) { delete response; return busy(); }
         const String escapedTitle = htmlEscapedString(String(title).c_str());
 		page->format(HTTP_HEAD_BEGIN, htmlEscapedString(getIdx()).c_str(), escapedTitle.c_str());
 		page->format(HTTP_HEAD_SCRIPT, getFirmwareVersion().c_str());
@@ -2498,8 +2501,7 @@ private:
         const size_t contiguous = url.startsWith(URI_THINGS) ? 5120U : 1024U;
         const size_t total = flash ? 1024U : 5120U;
         if ((ESP.getMaxFreeBlockSize() < contiguous || ESP.getFreeHeap() < total) && !url.equals(URI_RESET)){
-			//wlog->notice(F("Dropping Request with 503 Busy"));
-			request->send(503); // BUSY
+			request->send(503, "text/plain", "Device busy. Close Live WebLog or another device tab and reload this page.");
 			return false;
 		}
 		return true;

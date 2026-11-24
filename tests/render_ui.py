@@ -21,7 +21,7 @@ def raw_asset(path, name):
     return match.group(1)
 
 
-def render_pages(response_heap_budget=0, largest_heap_block=24000, response_allocation_fails=False, fail_header_write=False, schedules_ready=True):
+def render_pages(response_heap_budget=0, largest_heap_block=24000, response_allocation_fails=False, fail_header_write=False, schedules_ready=True, free_heap=33000):
     beca = BECA.read_text()
     network = NETWORK.read_text()
     log = ROOT / "WThermostat/WLogDevice.h"
@@ -30,8 +30,13 @@ def render_pages(response_heap_budget=0, largest_heap_block=24000, response_allo
 #include "Arduino.h"
 #include "Stream.h"
 #include <map>
-#include "lib/WAdapter/WAdapter/WPageResponse.h"
 size_t allocationBudget=HEAP_BUDGET?HEAP_BUDGET:SIZE_MAX;
+struct Chip{unsigned getChipId(){return 12345;}unsigned getFlashChipId(){return 123;}
+unsigned getFlashChipSize(){return 1048576;}unsigned getFlashChipRealSize(){return 1048576;}
+unsigned getSketchSize(){return 472112;}unsigned getFreeSketchSpace(){return 552960;}
+String getResetReason(){return "Software/System restart";}String getResetInfo(){return "No exception";}unsigned getFreeHeap(){return FREE_HEAP - (HEAP_BUDGET ? HEAP_BUDGET-allocationBudget : 0);}unsigned getMaxFreeBlockSize(){return MAX_BLOCK;}unsigned getHeapFragmentation(){return 3;}}ESP;
+
+#include "lib/WAdapter/WAdapter/WPageResponse.h"
 void*operator new(size_t size,const std::nothrow_t&)noexcept{
     if(FAIL_RESPONSE || size>MAX_BLOCK || size>allocationBudget || (FAIL_HEADER_WRITE && size>200))return nullptr;
     allocationBudget-=size;return ::operator new(size);
@@ -61,10 +66,6 @@ struct Ip{bool isSet()const{return true;}String toString()const{return "192.0.2.
 using IPAddress=Ip;
 struct Wifi{int softAPIP(){return 1;}Ip localIP(){return {};}Ip subnetMask(){return {};}Ip gatewayIP(){return {};}Ip dnsIP(int){return {};}
 String macAddress(){return "AA:BB:CC:DD:EE:FF";}String BSSIDstr(){return "02:11:22:33:44:55";}int RSSI(){return -62;}}WiFi;
-struct Chip{unsigned getChipId(){return 12345;}unsigned getFlashChipId(){return 123;}
-unsigned getFlashChipSize(){return 1048576;}unsigned getFlashChipRealSize(){return 1048576;}
-unsigned getSketchSize(){return 472112;}unsigned getFreeSketchSpace(){return 552960;}
-String getResetReason(){return "Software/System restart";}String getResetInfo(){return "No exception";}unsigned getFreeHeap(){return 33000;}unsigned getMaxFreeBlockSize(){return MAX_BLOCK;}unsigned getHeapFragmentation(){return 3;}}ESP;
 struct Log{template<class...T>void notice(T...){}};
 enum class wnWifiMode{WIFIMODE_STATION,WIFIMODE_FALLBACK};using wnWifiMode_t=wnWifiMode;
 const char*CT_TEXT_HTML="text/html",*CT_TEXT_PLAIN="text/plain",*ID_NETWORK="network";
@@ -190,7 +191,7 @@ int main(){
     {AsyncWebServerRequest r;beca.model=1;net.handleHttpInfo(&r);emit("/info-bac",r);}
 }
 '''
-    source = '#define SCHEDULES_READY ' + str(int(schedules_ready)) + '\n' + '#include <new>\n#define MAX_BLOCK ' + str(int(largest_heap_block)) + 'U\n#define FAIL_RESPONSE ' + str(int(response_allocation_fails)) + '\n' + '#define FAIL_HEADER_WRITE ' + str(int(fail_header_write)) + '\n#define HEAP_BUDGET ' + str(int(response_heap_budget)) + 'U\n' + source
+    source = '#define FREE_HEAP ' + str(int(free_heap)) + 'U\n#define SCHEDULES_READY ' + str(int(schedules_ready)) + '\n' + '#include <new>\n#define MAX_BLOCK ' + str(int(largest_heap_block)) + 'U\n#define FAIL_RESPONSE ' + str(int(response_allocation_fails)) + '\n' + '#define FAIL_HEADER_WRITE ' + str(int(fail_header_write)) + '\n#define HEAP_BUDGET ' + str(int(response_heap_budget)) + 'U\n' + source
     config = configparser.ConfigParser(interpolation=None)
     config.read([ROOT / "platformio.ini", ROOT / "platformio_override.ini"])
     source = '#define PREVIEW_VERSION ' + json.dumps(config["common"]["appversion"]) + '\n' + source

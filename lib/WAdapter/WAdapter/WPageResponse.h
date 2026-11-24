@@ -10,6 +10,7 @@
 // Small allocations tolerate fragmented ESP8266 heaps; sent blocks are released early.
 class WPageResponse final : public AsyncAbstractResponse, public Print {
 public:
+    static constexpr size_t transportReserve = 8192U;
     WPageResponse(const WPageResponse&) = delete;
     WPageResponse& operator=(const WPageResponse&) = delete;
     explicit WPageResponse(const char* contentType) {
@@ -29,6 +30,8 @@ public:
         size_t written = 0;
         while (written < length) {
             if (!last || last->length == sizeof(last->data)) {
+                // Keep room for TCP, response headers and the allocator's block overhead.
+                if (ESP.getFreeHeap() < transportReserve + sizeof(Block) + 16U) { failed = true; break; }
                 Block* block = new (std::nothrow) Block;
                 if (!block) { failed = true; break; }
                 if (last) last->next = block;

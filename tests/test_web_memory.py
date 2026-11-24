@@ -53,7 +53,7 @@ int main(){
 #include "Arduino.h"
 const char*URI_THINGS="/things",*URI_RESET="/reset",*URI_CSS="/css",*URI_JS="/js",*URI_FAVICON="/favicon.ico";
 struct Chip{unsigned block=1536,free=20000;unsigned getFreeHeap(){return free;}unsigned getMaxFreeBlockSize(){return block;}}ESP;
-struct AsyncWebServerRequest{String path;int code=0;String url(){return path;}const char*methodToString(){return "GET";}struct Client{struct Ip{String toString(){return "192.0.2.1";}};Ip remoteIP(){return {};}}client_;Client*client(){return &client_;}void send(int c){code=c;}};
+struct AsyncWebServerRequest{String path;int code=0;String url(){return path;}const char*methodToString(){return "GET";}struct Client{struct Ip{String toString(){return "192.0.2.1";}};Ip remoteIP(){return {};}}client_;Client*client(){return &client_;}void send(int c,const char*,const char*body){assert(*body);code=c;}};
 struct Logger{template<class...T>void notice(T...) {}};
 struct Probe{Logger log;Logger*wlog=&log;
 """
@@ -72,6 +72,13 @@ int main(){Probe p;
 """
         )
         self.compile_run(source, "web_heap_admission")
+
+    def test_wifi_fits_below_the_old_admission_threshold(self):
+        normal = render_pages()
+        limited = render_pages(free_heap=14000, response_heap_budget=6000)
+        for route in ("/wifi", "/wifi-static", "/wifi-escaped"):
+            self.assertEqual(limited[route], normal[route])
+            self.assertTrue(limited[route].rstrip().endswith("</html>"))
 
     def test_large_page_rejected_before_unsafe_constructor(self):
         # Small individual blocks and response objects still need a safe minimum.
@@ -128,7 +135,7 @@ struct AsyncWebServerRequest{
  Client*client(){return &client_;}
  AsyncWebServerResponse*beginResponse(int,const String&,const char*text){copies=strlen(text);assert(ESP.block>=copies);ESP.block-=copies;return &response;}
  AsyncWebServerResponse*beginResponse(int,const String&,const uint8_t*,size_t){return &response;}
- void send(int code){status=code;}
+ void send(int code,const char* =nullptr,const char* =nullptr){status=code;}
  void send(AsyncWebServerResponse*){status=200;assert(ESP.block>=1072);ESP.block-=1072;}
 };
 struct Log{template<class...T>void notice(T...){}};

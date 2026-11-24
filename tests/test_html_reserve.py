@@ -14,11 +14,12 @@ class HtmlReserveTests(unittest.TestCase):
 #include "Arduino.h"
 #include "Stream.h"
 #include "lib/WAdapter/WAdapter/WCheckedPrint.h"
+struct Chip {unsigned heap=12000;unsigned getFreeHeap(){return heap;}unsigned getMaxFreeBlockSize(){return heap;}} ESP;
 #include "lib/WAdapter/WAdapter/WPageResponse.h"
 const char* CT_TEXT_HTML="text/html",*HTTP_HEAD_BEGIN="%s:%s;",*HTTP_HEAD_SCRIPT="script:%s;",*HTTP_HEAD_STYLE="style:%s;",*HTTP_HEAD_END="end;";
 String htmlEscapedString(const char* value){return value;}
-struct Chip {unsigned heap=12000;unsigned getFreeHeap(){return heap;}unsigned getMaxFreeBlockSize(){return heap;}} ESP;
-struct AsyncWebServerRequest {unsigned status=0;bool headersReleased=false;void removeHeaders(){headersReleased=true;}void send(unsigned code){status=code;}};
+
+struct AsyncWebServerRequest {unsigned status=0;bool headersReleased=false;void removeHeaders(){headersReleased=true;}void send(unsigned code,const char*,const char*message){assert(*message);status=code;}};
 struct Probe {
     String csrfToken="token";
     bool isWebServerRunning(){return true;}

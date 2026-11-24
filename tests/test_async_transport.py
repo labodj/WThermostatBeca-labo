@@ -45,6 +45,7 @@ class AsyncTransportTests(unittest.TestCase):
 #include <limits>
 #include <vector>
 namespace asyncsrv { constexpr char T_hex_chars[] = "0123456789abcdef"; }
+struct Chip {size_t free=33000;size_t getFreeHeap()const{return free;}} ESP;
 #include "lib/WAdapter/WAdapter/WPageResponse.h"
 #define ASYNC_WRITE_FLAG_COPY 1
 #define ASYNC_TCP_DEBUG(...) do{}while(0)

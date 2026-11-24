@@ -145,14 +145,15 @@ int main(){
 #include "lib/WAdapter/WAdapter/WCheckedPrint.h"
 const char* CT_TEXT_HTML="text/html",*HTTP_HEAD_BEGIN="%s:%s;",*HTTP_HEAD_SCRIPT="script:%s;",*HTTP_HEAD_STYLE="style:%s;",*HTTP_HEAD_END="end;";
 String htmlEscapedString(const char* value){return value;}
+struct Chip{unsigned getMaxFreeBlockSize(){return 24000;}unsigned getFreeHeap(){return 24000;}}ESP;
 #include "lib/WAdapter/WAdapter/WPageResponse.h"
 std::function<void()> allocationHook;
 void*operator new(size_t size,const std::nothrow_t&)noexcept{
  if(allocationHook){auto hook=std::move(allocationHook);allocationHook=nullptr;hook();}
  return ::operator new(size);
 }
-struct AsyncWebServerRequest{void removeHeaders(){}void send(int){assert(false);}};
-struct Chip{unsigned getMaxFreeBlockSize(){return 24000;}unsigned getFreeHeap(){return 24000;}}ESP;
+struct AsyncWebServerRequest{void removeHeaders(){}void send(int,const char*,const char*){assert(false);}};
+
 struct Probe{String csrfToken="token";
  static void sendHttpPage(AsyncWebServerRequest*,WCheckedPrint*){assert(false);}
  bool isWebServerRunning(){return true;}const char*getIdx(){return "room";}String getFirmwareVersion(){return "test";}

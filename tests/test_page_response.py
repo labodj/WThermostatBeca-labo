@@ -27,6 +27,7 @@ void*operator new(size_t size,const std::nothrow_t&)noexcept{
  void*p=::operator new(size);for(auto&block:blocks)if(!block){block=p;++live;return p;}
  assert(false);return nullptr;
 }
+struct Chip {size_t free=33000;size_t getFreeHeap()const{return free;}} ESP;
 #include "lib/WAdapter/WAdapter/WPageResponse.h"
 int main(){
  std::string expected;for(size_t n=0;n<8192;++n)expected+=char(n%251);
@@ -49,6 +50,10 @@ int main(){
   assert(response.write(reinterpret_cast<const uint8_t*>(expected.data()),8192)==8192);
   assert(response.write(uint8_t('x'))==0&&!response._sourceValid());
  }assert(live==0&&largest<=300);
+ {remaining=100;WPageResponse response("text/html");
+  assert(response.write(reinterpret_cast<const uint8_t*>(expected.data()),256)==256);
+  ESP.free=8192;assert(response.write(uint8_t('x'))==0&&!response._sourceValid()&&live==1);
+ }assert(live==0);
  puts("PASS segmented pages, fragmented heap, exact binary bytes, allocation failures and early release");
 }
 ''', "segmented_page_response")
