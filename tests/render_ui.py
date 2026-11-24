@@ -108,7 +108,7 @@ struct Net{
     start = network.index("\ttemplate<class T, typename ... Args> WCheckedPrint * httpHeader")
     end = network.index("\n\tString getClientName", start)
     methods = method(NETWORK, "getCsrfToken") + method(NETWORK, "printHttpButton") + method(NETWORK, "printHttpCaption") + network[start:end]
-    for name in ("handleHttpRootRequest", "handleHttpDeviceConfiguration", "handleHttpDevicePage", "handleHttpDevicePageSubmitted", "webReturnStatusPage", "ipToStr", "handleHttpNetworkConfiguration", "handleHttpFirmwareUpdate", "handleHttpInfo"):
+    for name in ("mqttLoginRejected", "handleHttpRootRequest", "handleHttpDeviceConfiguration", "handleHttpDevicePage", "handleHttpDevicePageSubmitted", "webReturnStatusPage", "ipToStr", "handleHttpNetworkConfiguration", "handleHttpFirmwareUpdate", "handleHttpInfo"):
         methods += method(NETWORK, name)
     source = source.removesuffix("};\n") + methods + "\n};\n"
     source += beca[beca.index("const static char HTTP_CONFIG_SCHTAB_HEAD"):beca.index("class WBecaDevice:")]

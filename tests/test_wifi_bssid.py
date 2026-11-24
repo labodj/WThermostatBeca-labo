@@ -281,7 +281,7 @@ struct Probe{
  DNSServer*dnsApServer=nullptr;uint8_t bssid[6]={2,0x11,0x22,0x33,0x44,0x55};
  ~Probe(){deleteDnsApServer();}void deleteDnsApServer(){delete dnsApServer;dnsApServer=nullptr;}
  bool isSupportingApFallback(){return fallback;}bool isUpdateRunning(){return updating;}bool isStaticIpEnabled(){return staticIp;}const char*getStaticIp(){return "192.168.4.20";}const char*getSubnetMask(){return "255.255.0.0";}
- void disconnectMqtt(){}void logHeap(const char*){}String getClientName(bool){return "fixture";}
+ void mqttWifiLost(){}void logHeap(const char*){}String getClientName(bool){return "fixture";}
  const char*getSsid(){return "fixture-ssid";}const char*getPassword(){return "fixture-password";}
 '''
         for name in ['updateWifiRecovery', 'gatewayReachable', 'startApDns', 'startRecoveryAp', 'stopRecoveryAp', 'startLocalRecovery', 'getBssid', 'parseBssid', 'connectWifi']:

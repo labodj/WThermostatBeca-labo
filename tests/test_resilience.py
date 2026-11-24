@@ -138,19 +138,25 @@ struct Probe {
     bool isWifiConnected(){return wifi;}
     bool isMqttConnected(){return online;}
     bool mqttReconnect(){++attempts;return online=mqtt.reason==0;}
+    void disconnectMqtt(){mqtt.reason=MQTT_DISCONNECTED;online=false;}
     void serviceHassDiscovery(unsigned long){}
-''' + method(network, 'serviceMqtt') + r'''
+''' + method(network, 'mqttLoginRejected') + method(network, 'mqttWifiLost') + method(network, 'serviceMqtt') + r'''
     void tick(unsigned long t){testMillis=t;serviceMqtt(t);}
 };
 int main(){
     Probe p; p.tick(0);assert(!p.attempts);
     p.wifi=true;p.restartFlag=true;p.tick(0);assert(!p.attempts && !p.mqtt.loops);
     p.restartFlag=false;p.mqtt.reason=MQTT_CONNECT_BAD_CREDENTIALS;
-    p.tick(0);p.tick(299999);assert(p.attempts==1);
+    p.tick(0);
+    for (auto reason : {MQTT_CONNECT_UNAUTHORIZED, MQTT_CONNECT_BAD_CREDENTIALS}) {
+        p.mqtt.reason=reason;p.wifi=false;p.mqttWifiLost();p.tick(42000);
+        p.wifi=true;p.tick(299999);assert(p.attempts==1 && p.mqtt.reason==reason);
+    }
     p.mqtt.reason=MQTT_CONNECT_FAILED;
     p.tick(300000);p.tick(329999);assert(p.attempts==2 && !p.online);
     p.mqtt.reason=0;p.tick(330000);assert(p.online && p.mqtt.loops==1);
     p.wifi=false;p.tick(330001);assert(p.mqtt.loops==1);
+    p.mqttWifiLost();p.wifi=true;p.mqtt.reason=0;p.tick(330002);assert(p.attempts==4 && p.online);
     Probe wrap;wrap.wifi=true;wrap.mqtt.reason=MQTT_CONNECT_FAILED;
     wrap.tick(ULONG_MAX-999);wrap.tick(28999);assert(wrap.attempts==1);
     wrap.tick(29000);assert(wrap.attempts==2);

@@ -152,7 +152,7 @@ The ESP8266 queries the configured NTP server in the background when Wi-Fi conne
 
 ### Wi-Fi works but MQTT is offline
 
-Open **Info** over Wi-Fi and check **MQTT connection**. If the broker rejected the login, verify the username, password and broker permissions. The thermostat retries a rejected login after five minutes. For other connection failures it retries after 30 seconds. Restoring the broker or correcting its credentials there requires no thermostat reboot.
+Open **Info** over Wi-Fi and check **MQTT connection**. If the broker rejected the login, verify the username, password and broker permissions. The thermostat retries a rejected login after five minutes, even if Wi-Fi drops and reconnects during that interval. For other connection failures it retries after 30 seconds. Restoring the broker or correcting its credentials there requires no thermostat reboot.
 
 The retained `<base>/tele/LWT` reports the MQTT connection. The separate `<base>/tele/mcu` reports whether the controller has provided a complete state. Check both when diagnosing an unavailable thermostat. During a broker outage you can still read the current state and programs through the local WebThings API while the thermostat is reachable over Wi-Fi.
 

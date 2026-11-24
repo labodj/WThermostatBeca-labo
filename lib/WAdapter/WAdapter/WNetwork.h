@@ -236,8 +236,7 @@ public:
 						this->connectFailCounter++;
 						wlog->notice(F("WiFi: Station disconnected (count: %d)"), this->connectFailCounter);
 #ifndef MINIMAL
-						this->disconnectMqtt();
-						this->mqttRetryInterval = 0;
+						this->mqttWifiLost();
 #endif
 					}
 				});
@@ -266,8 +265,7 @@ public:
 			if (wifiModeRunning == wnWifiMode::WIFIMODE_FALLBACK || wifiModeRunning == wnWifiMode::WIFIMODE_AP){
 				wlog->warning(F("WiFi: deactivating softApMode"));
 #ifndef MINIMAL
-				this->disconnectMqtt();
-				this->mqttRetryInterval = 0;
+				this->mqttWifiLost();
 #endif
 				WiFi.softAPdisconnect();
 				lastWifiConnect=0;
@@ -634,6 +632,19 @@ public:
 		return ((this->isSupportingMqtt()) && (this->mqttClient != nullptr)
 				&& (this->mqttClient->connected()));
 	}
+
+    bool mqttLoginRejected() const {
+        if (!mqttClient) return false;
+        const int reason = mqttClient->state();
+        return reason == MQTT_CONNECT_BAD_CREDENTIALS || reason == MQTT_CONNECT_UNAUTHORIZED;
+    }
+
+    void mqttWifiLost() {
+        // A Wi-Fi transition does not repair credentials or cancel the broker retry delay.
+        if (mqttLoginRejected()) return;
+        disconnectMqtt();
+        mqttRetryInterval = 0;
+    }
 
 	void disconnectMqtt() {
 		if (this->mqttClient != nullptr) {
@@ -1490,9 +1501,7 @@ private:
         if (!isMqttConnected()) {
             if (now - lastMqttConnect < mqttRetryInterval) return;
             const bool ready = mqttReconnect();
-            const int reason = mqttClient->state();
-            mqttRetryInterval = (reason == MQTT_CONNECT_BAD_CREDENTIALS || reason == MQTT_CONNECT_UNAUTHORIZED)
-                ? 300000UL : 30000UL;
+            mqttRetryInterval = mqttLoginRejected() ? 300000UL : 30000UL;
             lastMqttConnect = millis();
             if (!ready) return;
         }
@@ -1943,8 +1952,7 @@ private:
             else if (!*getMqttServer()) page->print(F("Broker not configured"));
             else if (!isWifiConnected()) page->print(F("Waiting for Wi-Fi"));
             else if (isMqttConnected()) page->print(F("Connected"));
-            else if (mqttClient && (mqttClient->state() == MQTT_CONNECT_BAD_CREDENTIALS ||
-                                    mqttClient->state() == MQTT_CONNECT_UNAUTHORIZED))
+            else if (mqttLoginRejected())
                 page->print(F("Broker rejected login. Check credentials and permissions. Retrying every 5 minutes."));
             else page->print(F("Disconnected. Retrying automatically."));
             htmlTableRowEnd(page);
